@@ -21,194 +21,6 @@ const SUBSCRIPTION_COUNTER_KEY = "SUB-2026";
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 const toDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
 
-export interface CreateSubscriptionInput {
-  customerId: string;
-  templateId: string;
-  startDate: string; // YYYY-MM-DD
-}
-
-function policyOf(plan: Plan): PlanPolicy {
-  return {
-    pausable: plan.pausable,
-    renewable: plan.renewable,
-    closable: plan.closable,
-    autoClose: plan.autoClose,
-  };
-}
-
-/**
- * Gap-free document numbers, in the same counter table the invoice numbers use.
- * A Postgres sequence leaves gaps on rollback; this does not.
- */
-async function nextNumber(tx: Prisma.TransactionClient, key: string, pad = 5): Promise<string> {
-  const counter = await tx.counter.upsert({
-    where: { key },
-    create: { key, lastNo: 1 },
-    update: { lastNo: { increment: 1 } },
-  });
-  return `${key}-${String(counter.lastNo).padStart(pad, "0")}`;
-}
-
-/**
- * Build a subscription from a quotation template: the template supplies the plan
- * and the lines, the plan supplies the billing period, and the engine prices it
- * — so the quote, the subscription and the first invoice all show one number.
- *
- * It is created as a draft; nothing is billed until it is activated.
- */
-export async function createSubscriptionFromTemplate(input: CreateSubscriptionInput) {
-  const template = await prisma.quotationTemplate.findUnique({
-    where: { id: input.templateId },
-    include: { plan: true, lines: true },
-  });
-  if (!template || !template.isActive) throw new Error("Quotation template not found.");
-  if (template.lines.length === 0) throw new Error("That template has no product lines.");
-
-  const customer = await prisma.customer.findUnique({ where: { id: input.customerId } });
-  if (!customer) throw new Error("Customer not found.");
-
-  const productIds = template.lines.map((line) => line.productId);
-  const [products, taxes, discounts] = await Promise.all([
-    prisma.product.findMany({ where: { id: { in: productIds } } }),
-    prisma.tax.findMany(),
-    prisma.discount.findMany({ where: { isActive: true } }),
-  ]);
-
-  const productById = new Map(products.map((product) => [product.id, product]));
-
-  const lines = template.lines.map((line) => {
-    const product = productById.get(line.productId);
-    if (!product) throw new Error("A template line points at a missing product.");
-    return {
-      product: {
-        id: product.id,
-        name: product.name,
-        salesPrice: product.salesPrice,
-        taxId: product.taxId,
-      },
-      quantity: line.quantity,
-    };
-  });
-
-  const startIso = input.startDate;
-  const doc = priceDocument({
-    lines,
-    taxes: taxes.map((tax) => ({ id: tax.id, name: tax.name, rateBp: tax.rateBp })),
-    discounts: discounts.map((discount) => ({
-      id: discount.id,
-      name: discount.name,
-      type: discount.type,
-      value: discount.value,
-      scope: discount.scope,
-      productIds: discount.productIds,
-      minPurchase: discount.minPurchase,
-      minQuantity: discount.minQuantity,
-      startsAt: discount.startsAt ? isoDate(discount.startsAt) : null,
-      endsAt: discount.endsAt ? isoDate(discount.endsAt) : null,
-      usageLimit: discount.usageLimit,
-      perCustomerLimit: discount.perCustomerLimit,
-      usedCount: discount.usedCount,
-      isActive: discount.isActive,
-    })),
-    asOf: startIso,
-  });
-
-  const periodEndIso = advance(
-    startIso,
-    template.plan.billingPeriod,
-    template.plan.intervalCount,
-    Number(startIso.slice(8, 10)),
-  );
-
-  return prisma.$transaction(async (tx) => {
-    const number = await nextNumber(tx, "SUB-2026");
-
-    const subscription = await tx.subscription.create({
-      data: {
-        id: randomUUID(),
-        number,
-        customerId: customer.id,
-        planId: template.planId,
-        templateId: template.id,
-        status: "draft",
-        startDate: new Date(`${startIso}T00:00:00Z`),
-        expiryDate:
-          template.plan.billingPeriod === "year"
-            ? new Date(`${periodEndIso}T00:00:00Z`)
-            : null,
-        nextBillingDate: new Date(`${startIso}T00:00:00Z`),
-        periodStart: new Date(`${startIso}T00:00:00Z`),
-        periodEnd: new Date(`${periodEndIso}T00:00:00Z`),
-        paymentTermsDays: customer.paymentTermsDays,
-        lines: {
-          create: doc.lines.map((line, index) => ({
-            id: randomUUID(),
-            productId: line.productId,
-            quantity: line.quantity,
-            unitPrice: line.unitPrice,
-            taxId: productById.get(template.lines[index].productId)?.taxId ?? null,
-          })),
-        },
-      },
-    });
-
-    return { subscription, total: doc.total };
-  });
-}
-
-export interface TransitionResult {
-  status: SubStatus;
-  message: string;
-}
-
-/**
- * Move a subscription along its lifecycle. The transition table and the plan's
- * switches decide what is allowed — the UI only offers the buttons.
- */
-export async function transitionSubscription(
-  subscriptionId: string,
-  event: SubEvent,
-): Promise<TransitionResult> {
-  const subscription = await prisma.subscription.findUnique({
-    where: { id: subscriptionId },
-    include: { plan: true },
-  });
-  if (!subscription) throw new Error("Subscription not found.");
-
-  const check = checkTransition({
-    from: subscription.status,
-    event,
-    plan: policyOf(subscription.plan),
-  });
-  if (!check.ok || !check.next) throw new Error(check.reason ?? "That move is not allowed.");
-
-  const data: Prisma.SubscriptionUpdateInput = { status: check.next };
-
-  // activating sets the first billing period; a subscription that starts in the
-  // future stays dormant until its start date arrives
-  if (check.next === "active") {
-    const startIso = isoDate(subscription.startDate);
-    const endIso = advance(
-      startIso,
-      subscription.plan.billingPeriod,
-      subscription.plan.intervalCount,
-      Number(startIso.slice(8, 10)),
-    );
-    data.periodStart = new Date(`${startIso}T00:00:00Z`);
-    data.periodEnd = new Date(`${endIso}T00:00:00Z`);
-    data.nextBillingDate = new Date(`${startIso}T00:00:00Z`);
-  }
-
-  if (check.next === "paused") data.pausedAt = new Date();
-
-  await prisma.subscription.update({ where: { id: subscription.id }, data });
-
-  return {
-    status: check.next,
-    message: `Subscription ${subscription.number} is now ${check.next}.`,
-  };
-}
-
 function asSentence(reason: string): string {
   const sentence = reason.charAt(0).toUpperCase() + reason.slice(1);
   return sentence.endsWith(".") ? sentence : `${sentence}.`;
@@ -383,80 +195,86 @@ export async function startSubscriptionFromTemplate(details: {
     throw new Error("The expiry date must be after the start date.");
   }
 
-  return prisma.$transaction(async (tx) => {
-    const [customer, template] = await Promise.all([
-      tx.customer.findFirst({ where: { id: details.customerId, isActive: true } }),
-      tx.quotationTemplate.findFirst({
-        where: { id: details.templateId, isActive: true },
-        include: { plan: true, lines: true },
-      }),
-    ]);
+  // The reads happen before the transaction: they are read-only, and running
+  // them inside an interactive transaction over a remote database blows the
+  // 5-second default (Prisma P2028). Only the two writes are transactional.
+  const [customer, template] = await Promise.all([
+    prisma.customer.findFirst({ where: { id: details.customerId, isActive: true } }),
+    prisma.quotationTemplate.findFirst({
+      where: { id: details.templateId, isActive: true },
+      include: { plan: true, lines: true },
+    }),
+  ]);
     if (!customer) throw new Error("Choose an active customer.");
     if (!template) throw new Error("Choose an active quotation template.");
     if (template.lines.length === 0) throw new Error("This template has no lines.");
 
-    const variantIds = template.lines
-      .map((line) => line.variantId)
-      .filter((variantId): variantId is string => variantId !== null);
-    const [products, variants] = await Promise.all([
-      tx.product.findMany({
-        where: { id: { in: template.lines.map((line) => line.productId) } },
-        select: { id: true, salesPrice: true, taxId: true },
-      }),
-      tx.productVariant.findMany({
-        where: { id: { in: variantIds } },
-        select: { id: true, extraPrice: true },
-      }),
-    ]);
-    const productById = new Map(products.map((product) => [product.id, product]));
-    const extraPriceByVariant = new Map(variants.map((variant) => [variant.id, variant.extraPrice]));
+  const variantIds = template.lines
+    .map((line) => line.variantId)
+    .filter((variantId): variantId is string => variantId !== null);
+  const [products, variants] = await Promise.all([
+    prisma.product.findMany({
+      where: { id: { in: template.lines.map((line) => line.productId) } },
+      select: { id: true, salesPrice: true, taxId: true },
+    }),
+    prisma.productVariant.findMany({
+      where: { id: { in: variantIds } },
+      select: { id: true, extraPrice: true },
+    }),
+  ]);
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const extraPriceByVariant = new Map(variants.map((variant) => [variant.id, variant.extraPrice]));
 
-    const subscriptionLines = template.lines.map((line, lineIndex) => {
-      const product = productById.get(line.productId);
-      if (!product) throw new Error("A product on this template no longer exists.");
-      const basePrice = lineIndex === 0 ? template.plan.price : product.salesPrice;
-      const extraPrice = line.variantId ? (extraPriceByVariant.get(line.variantId) ?? 0) : 0;
-      return {
-        productId: line.productId,
-        variantId: line.variantId,
-        quantity: line.quantity,
-        unitPrice: basePrice + extraPrice,
-        taxId: product.taxId,
-      };
-    });
-
-    const counter = await tx.counter.upsert({
-      where: { key: SUBSCRIPTION_COUNTER_KEY },
-      create: { key: SUBSCRIPTION_COUNTER_KEY, lastNo: 1 },
-      update: { lastNo: { increment: 1 } },
-    });
-    const subscriptionNumber = `${SUBSCRIPTION_COUNTER_KEY}-${String(counter.lastNo).padStart(5, "0")}`;
-
-    const firstPeriodEnd = periodEnd(
-      details.startDate,
-      template.plan.billingPeriod,
-      template.plan.intervalCount,
-      toDate(details.startDate).getUTCDate(),
-    );
-
-    const subscription = await tx.subscription.create({
-      data: {
-        number: subscriptionNumber,
-        customerId: customer.id,
-        planId: template.planId,
-        templateId: template.id,
-        status: "draft",
-        startDate: toDate(details.startDate),
-        expiryDate: details.expiryDate ? toDate(details.expiryDate) : null,
-        nextBillingDate: toDate(details.startDate),
-        periodStart: toDate(details.startDate),
-        periodEnd: toDate(firstPeriodEnd),
-        paymentTermsDays: customer.paymentTermsDays,
-        lines: { create: subscriptionLines },
-      },
-      select: { id: true, number: true },
-    });
-
-    return subscription;
+  const subscriptionLines = template.lines.map((line, lineIndex) => {
+    const product = productById.get(line.productId);
+    if (!product) throw new Error("A product on this template no longer exists.");
+    const basePrice = lineIndex === 0 ? template.plan.price : product.salesPrice;
+    const extraPrice = line.variantId ? (extraPriceByVariant.get(line.variantId) ?? 0) : 0;
+    return {
+      productId: line.productId,
+      variantId: line.variantId,
+      quantity: line.quantity,
+      unitPrice: basePrice + extraPrice,
+      taxId: product.taxId,
+    };
   });
+
+  return prisma.$transaction(
+    async (tx) => {
+      const counter = await tx.counter.upsert({
+        where: { key: SUBSCRIPTION_COUNTER_KEY },
+        create: { key: SUBSCRIPTION_COUNTER_KEY, lastNo: 1 },
+        update: { lastNo: { increment: 1 } },
+      });
+      const subscriptionNumber = `${SUBSCRIPTION_COUNTER_KEY}-${String(counter.lastNo).padStart(5, "0")}`;
+
+      const firstPeriodEnd = periodEnd(
+        details.startDate,
+        template.plan.billingPeriod,
+        template.plan.intervalCount,
+        toDate(details.startDate).getUTCDate(),
+      );
+
+      const subscription = await tx.subscription.create({
+        data: {
+          number: subscriptionNumber,
+          customerId: customer.id,
+          planId: template.planId,
+          templateId: template.id,
+          status: "draft",
+          startDate: toDate(details.startDate),
+          expiryDate: details.expiryDate ? toDate(details.expiryDate) : null,
+          nextBillingDate: toDate(details.startDate),
+          periodStart: toDate(details.startDate),
+          periodEnd: toDate(firstPeriodEnd),
+          paymentTermsDays: customer.paymentTermsDays,
+          lines: { create: subscriptionLines },
+        },
+        select: { id: true, number: true },
+      });
+
+      return subscription;
+    },
+    { timeout: 20_000, maxWait: 10_000 },
+  );
 }
