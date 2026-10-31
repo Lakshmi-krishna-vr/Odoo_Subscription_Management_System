@@ -88,9 +88,15 @@ export default async function StaffSubscriptionsPage({
       orderBy: { nextBillingDate: "asc" },
       skip: (pageNumber - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
-      include: {
-        customer: true,
-        plan: true,
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        startDate: true,
+        expiryDate: true,
+        nextBillingDate: true,
+        customer: { select: { companyName: true } },
+        plan: { select: { name: true } },
         _count: { select: { lines: true } },
       },
     }),

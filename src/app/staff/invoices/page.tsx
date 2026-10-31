@@ -1,7 +1,10 @@
 import { InvoiceStatus, Prisma } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
+import { todayIso } from "@/core/periods";
+import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
+import { displayStatusWhere, invoiceDisplayStatus } from "@/server/invoices";
 
 // Read-only page: the build must never hit the database.
 export const dynamic = "force-dynamic";
@@ -48,7 +51,7 @@ function readStatus(value: SearchValue): InvoiceStatus | null {
   return INVOICE_STATUSES.includes(statusText) ? (statusText as InvoiceStatus) : null;
 }
 
-function buildWhere(filters: InvoiceFilters): Prisma.InvoiceWhereInput {
+function buildWhere(filters: InvoiceFilters, today: string): Prisma.InvoiceWhereInput {
   const { statusFilter, searchText, fromDate, toDate } = filters;
   const invoiceDate: Prisma.DateTimeFilter = {
     ...(fromDate ? { gte: new Date(`${fromDate}T00:00:00Z`) } : {}),
@@ -56,7 +59,7 @@ function buildWhere(filters: InvoiceFilters): Prisma.InvoiceWhereInput {
   };
 
   return {
-    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(statusFilter ? { AND: [displayStatusWhere(statusFilter, today)] } : {}),
     ...(fromDate || toDate ? { invoiceDate } : {}),
     ...(searchText
       ? {
@@ -98,7 +101,8 @@ export default async function StaffInvoicesPage({
     toDate: readDate(params.to),
   };
   const pageNumber = Math.max(1, Number.parseInt(firstValue(params.page), 10) || 1);
-  const where = buildWhere(filters);
+  const today = todayIso();
+  const where = buildWhere(filters, today);
 
   const [invoices, totalCount, sums, overdueCount] = await Promise.all([
     prisma.invoice.findMany({
@@ -106,14 +110,24 @@ export default async function StaffInvoicesPage({
       orderBy: { invoiceDate: "desc" },
       skip: (pageNumber - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
-      include: { customer: true },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        invoiceDate: true,
+        dueDate: true,
+        total: true,
+        amountPaid: true,
+        sentAt: true,
+        customer: { select: { companyName: true } },
+      },
     }),
     prisma.invoice.count({ where }),
     prisma.invoice.aggregate({
       where,
       _sum: { total: true, amountPaid: true },
     }),
-    prisma.invoice.count({ where: { AND: [where, { status: "overdue" }] } }),
+    prisma.invoice.count({ where: { AND: [where, displayStatusWhere("overdue", today)] } }),
   ]);
 
   const invoiced = sums._sum.total ?? 0;
@@ -199,7 +213,7 @@ export default async function StaffInvoicesPage({
               </tr>
             ) : (
               invoices.map((invoice) => {
-                const balance = Math.max(0, invoice.total - invoice.amountPaid);
+                const balance = invoiceBalance(invoice.total, invoice.amountPaid);
 
                 return (
                   <tr key={invoice.id}>
@@ -216,7 +230,7 @@ export default async function StaffInvoicesPage({
                     <td>{formatDate(invoice.dueDate)}</td>
                     <td>
                       <span className="flex flex-wrap gap-1">
-                        <Badge>{invoice.status}</Badge>
+                        <Badge>{invoiceDisplayStatus(invoice, today)}</Badge>
                         {invoice.sentAt ? <Badge>Sent</Badge> : null}
                       </span>
                     </td>

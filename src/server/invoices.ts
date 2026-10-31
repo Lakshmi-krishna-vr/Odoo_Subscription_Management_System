@@ -1,8 +1,66 @@
-import type { InvoiceStatus } from "@prisma/client";
+import type { InvoiceStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { todayIso } from "@/core/periods";
+import { deriveInvoiceStatus } from "@/core/state";
 
 const COUNTER_KEY = "INV-2026";
+
+export const INVOICE_STATUS_LABEL: Record<InvoiceStatus, string> = {
+  draft: "Draft",
+  confirmed: "Confirmed",
+  partially_paid: "Partially paid",
+  paid: "Paid",
+  overdue: "Overdue",
+  cancelled: "Cancelled",
+};
 const SENDABLE_STATUSES: InvoiceStatus[] = ["confirmed", "partially_paid", "paid", "overdue"];
+
+export function invoiceDisplayStatus(
+  invoice: {
+    status: InvoiceStatus;
+    number: string | null;
+    total: number;
+    amountPaid: number;
+    dueDate: Date;
+  },
+  today: string = todayIso(),
+): InvoiceStatus {
+  return deriveInvoiceStatus({
+    total: invoice.total,
+    amountPaid: invoice.amountPaid,
+    dueDate: invoice.dueDate.toISOString().slice(0, 10),
+    today,
+    confirmed: invoice.number !== null,
+    cancelled: invoice.status === "cancelled",
+  });
+}
+
+export function displayStatusWhere(
+  status: InvoiceStatus,
+  today: string = todayIso(),
+): Prisma.InvoiceWhereInput {
+  const todayDate = new Date(`${today}T00:00:00Z`);
+  const total = prisma.invoice.fields.total;
+  const numbered: Prisma.InvoiceWhereInput = {
+    status: { not: "cancelled" },
+    number: { not: null },
+  };
+
+  switch (status) {
+    case "cancelled":
+      return { status: "cancelled" };
+    case "draft":
+      return { status: { not: "cancelled" }, number: null };
+    case "paid":
+      return { ...numbered, amountPaid: { gte: total } };
+    case "partially_paid":
+      return { ...numbered, amountPaid: { gt: 0, lt: total } };
+    case "overdue":
+      return { ...numbered, amountPaid: { equals: 0, lt: total }, dueDate: { lt: todayDate } };
+    case "confirmed":
+      return { ...numbered, amountPaid: { equals: 0, lt: total }, dueDate: { gte: todayDate } };
+  }
+}
 
 export async function confirmInvoice(invoiceId: string): Promise<{ number: string }> {
   return prisma.$transaction(async (tx) => {

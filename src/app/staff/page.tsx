@@ -1,9 +1,10 @@
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 
 const LINKS = [
+  { href: "/staff/customers", label: "Customers", body: "Contacts, payment terms, subscriptions and what each customer still owes." },
   { href: "/staff/subscriptions/new", label: "New subscription", body: "Start an offer from a quotation template and move it to a live subscription." },
   { href: "/staff/subscriptions", label: "Subscriptions", body: "Every subscription, its plan, status and next billing date." },
-  { href: "/staff/invoices", label: "Invoices", body: "Confirm, cancel, print and record payments against an invoice." },
+  { href: "/staff/invoices", label: "Invoices", body: "Confirm, cancel, send, print and record payments against an invoice." },
   { href: "/staff/billing", label: "Billing run", body: "Preview the invoices that are due, then create them in one go." },
   { href: "/staff/finance", label: "Finance", body: "Invoiced, collected, outstanding and the largest overdue accounts." },
 ];
@@ -13,7 +14,7 @@ export default function StaffPage() {
     <Shell role="staff">
       <PageHeader
         title="Staff"
-        subtitle="Day-to-day operations: subscriptions, invoices, billing and finance."
+        subtitle="Day-to-day operations: customers, subscriptions, invoices, billing and finance."
         right={<Badge>workspace</Badge>}
       />
 

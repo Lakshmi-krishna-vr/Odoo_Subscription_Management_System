@@ -1,10 +1,17 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { SubStatus } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
 import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
-import { allowedEvents, previewNextInvoice, quotationValidUntil } from "@/server/subscriptions";
+import { INVOICE_STATUS_LABEL, invoiceDisplayStatus } from "@/server/invoices";
+import {
+  SUBSCRIPTION_STATUS_LABEL,
+  allowedEvents,
+  loadSubscriptionDocument,
+} from "@/server/subscriptions";
+import { LinesEditor } from "./lines-editor";
 import { SubscriptionActions } from "./subscription-actions";
 
 export const dynamic = "force-dynamic";
@@ -19,12 +26,24 @@ const STATUS_STEPS: { status: SubStatus; label: string }[] = [
   { status: "closed", label: "Closed" },
 ];
 
+const EDITABLE_STATUSES: SubStatus[] = ["draft", "quotation"];
+
 const PERIOD_LABEL: Record<string, string> = {
   day: "Daily",
   week: "Weekly",
   month: "Monthly",
   year: "Yearly",
 };
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const document = UUID.test(id) ? await loadSubscriptionDocument(id) : null;
+  return { title: `${document?.subscription.number ?? "Subscription"} · Brightloop` };
+}
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -86,28 +105,31 @@ export default async function SubscriptionDetailPage({
   const { id } = await params;
   if (!UUID.test(id)) notFound();
 
-  const subscription = await prisma.subscription.findUnique({
-    where: { id },
-    include: {
-      customer: true,
-      plan: true,
-      lines: true,
-      invoices: { orderBy: { invoiceDate: "desc" } },
-    },
-  });
-  if (!subscription) notFound();
-
-  const { customer, plan } = subscription;
-  const [nextInvoice, template] = await Promise.all([
-    previewNextInvoice(subscription),
-    subscription.templateId
-      ? prisma.quotationTemplate.findUnique({ where: { id: subscription.templateId } })
-      : null,
+  const [document, invoices] = await Promise.all([
+    loadSubscriptionDocument(id),
+    prisma.invoice.findMany({
+      where: { subscriptionId: id },
+      orderBy: { invoiceDate: "desc" },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        periodStart: true,
+        periodEnd: true,
+        invoiceDate: true,
+        dueDate: true,
+        total: true,
+        amountPaid: true,
+      },
+    }),
   ]);
-  const validUntil =
-    subscription.status === "quotation" && template
-      ? quotationValidUntil(subscription.createdAt, template.validityDays)
-      : null;
+  if (!document) notFound();
+
+  const { subscription, customer, plan, lines, nextInvoice, productNames, activeProducts, variants } =
+    document;
+  const canEditLines = EDITABLE_STATUSES.includes(subscription.status);
+  const variantLabels = new Map(variants.map((variant) => [variant.id, variant.label]));
+  const validUntil = subscription.status === "quotation" ? document.validUntil : null;
   const policies = [
     plan.autoClose ? "auto-close" : null,
     plan.closable ? "can close early" : null,
@@ -122,7 +144,15 @@ export default async function SubscriptionDetailPage({
         subtitle={customer.companyName}
         right={
           <div className="flex items-start gap-2">
-            <Badge>{subscription.status}</Badge>
+            <Badge>{SUBSCRIPTION_STATUS_LABEL[subscription.status]}</Badge>
+            {canEditLines ? (
+              <a
+                href={`/staff/subscriptions/${subscription.id}/quote`}
+                className="px-2 py-1.5 text-sm font-medium text-[#1f5eff] hover:underline"
+              >
+                View quotation
+              </a>
+            ) : null}
             <SubscriptionActions
               subscriptionId={subscription.id}
               allowedEvents={allowedEvents(subscription.status, plan)}
@@ -160,7 +190,14 @@ export default async function SubscriptionDetailPage({
       <Card title="Details">
         <div className="grid gap-6 sm:grid-cols-2">
           <dl className="grid gap-2 text-sm">
-            <Detail label="Company">{customer.companyName}</Detail>
+            <Detail label="Company">
+              <a
+                href={`/staff/customers/${customer.id}`}
+                className="font-medium text-[#1f5eff] hover:underline"
+              >
+                {customer.companyName}
+              </a>
+            </Detail>
             <Detail label="Contact">{customer.contactName}</Detail>
             <Detail label="Email">{customer.email}</Detail>
             <Detail label="Payment terms">{subscription.paymentTermsDays} days</Detail>
@@ -191,6 +228,22 @@ export default async function SubscriptionDetailPage({
           </dl>
         </div>
       </Card>
+
+      {canEditLines ? (
+        <Card title="Edit lines" description="Lines can be changed until the subscription is confirmed.">
+          <LinesEditor
+            subscriptionId={subscription.id}
+            lines={lines.map((line) => ({
+              id: line.id,
+              productName: productNames.get(line.productId) ?? "Product no longer active",
+              variantLabel: line.variantId ? (variantLabels.get(line.variantId) ?? null) : null,
+              quantity: line.quantity,
+            }))}
+            products={activeProducts}
+            variants={variants}
+          />
+        </Card>
+      ) : null}
 
       <Card
         title="Next invoice preview"
@@ -260,14 +313,14 @@ export default async function SubscriptionDetailPage({
             </tr>
           </thead>
           <tbody>
-            {subscription.invoices.length === 0 ? (
+            {invoices.length === 0 ? (
               <tr>
                 <td colSpan={6} className="text-[var(--muted)]">
-                  No invoices yet.
+                  No invoices for this subscription yet.
                 </td>
               </tr>
             ) : (
-              subscription.invoices.map((invoice) => (
+              invoices.map((invoice) => (
                 <tr key={invoice.id}>
                   <td>
                     <a
@@ -282,7 +335,7 @@ export default async function SubscriptionDetailPage({
                   </td>
                   <td>{formatDate(invoice.invoiceDate)}</td>
                   <td>
-                    <Badge>{invoice.status}</Badge>
+                    <Badge>{INVOICE_STATUS_LABEL[invoiceDisplayStatus(invoice)]}</Badge>
                   </td>
                   <td className="num">{formatINR(invoice.total)}</td>
                   <td className="num font-medium">
