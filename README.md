@@ -1,7 +1,6 @@
-### Live Link
-https://oddoo.vercel.app/
-
 # Brightloop Subscription Management
+
+**Live demo:** <https://oddoo.vercel.app/>
 
 A subscription management system that replaces the spreadsheet Brightloop Software runs its billing
 month on. It holds the catalogue of products and plans, quotes a customer, tracks a subscription
@@ -80,7 +79,7 @@ cp .env.example .env
 Fill in `.env`:
 
 ```ini
-DATABASE_URL="postgresql://user:password@host:5432/subscriptions?sslmode=require"
+DATABASE_URL="postgresql://user:***@host:5432/subscriptions?sslmode=require"
 AUTH_SECRET="a-long-random-string"   # signs the session cookie; 16 characters minimum
 JOB_SECRET="another-random-string"   # only needed for the scheduled billing endpoint
 ```
@@ -100,6 +99,43 @@ Demo logins, all with the password `Brightloop#2026`:
 | `admin@brightloop.test` | admin | `/admin` |
 | `staff@brightloop.test` | staff | `/staff` |
 | `customer@brightloop.test` | customer | `/portal` (Acme Retail) |
+
+## Routes
+
+Twenty-eight pages and one API endpoint. Access is enforced on the server by the route-group layout,
+so typing a URL into the address bar is refused, not just hidden.
+
+| Route | What it does | Access |
+| --- | --- | --- |
+| `/` | Choose the admin, staff or customer workspace to continue. | public |
+| `/login` | Sign in to reach your role's workspace. | public |
+| `/register` | Create a customer account to start using the portal. | public |
+| `/forgot` | Request a password reset for your account. | public |
+| `/reset/[token]` | Set a new password using your reset link. | public, single use |
+| `/admin` | Overview of the catalogue and links to every admin screen. | admin |
+| `/admin/products` | Browse the product catalogue. | admin |
+| `/admin/products/new` | Add a product, with variants. | admin |
+| `/admin/plans` | Review subscription plans and their policies. | admin |
+| `/admin/plans/new` | Create a plan with its price, billing cycle and policy switches. | admin |
+| `/admin/discounts` | Review active and past discount offers. | admin |
+| `/admin/discounts/new` | Create a discount and define its eligibility rules. | admin |
+| `/admin/staff` | Create, deactivate and reactivate staff accounts. | admin |
+| `/staff` | Workspace hub: customers, subscriptions, invoices, billing, finance. | staff |
+| `/staff/customers` | Find and manage customer accounts. | staff |
+| `/staff/customers/[id]` | A customer's details, subscriptions and outstanding balance. | staff |
+| `/staff/subscriptions` | Every subscription with plan, status and next billing date. | staff |
+| `/staff/subscriptions/new` | Build a subscription for a customer from a quotation template. | staff |
+| `/staff/subscriptions/[id]` | Review and update a subscription, its lines and its status. | staff |
+| `/staff/subscriptions/[id]/quote` | Printable quotation for a subscription before activation. | staff |
+| `/staff/billing` | Preview due billing, create the invoices, confirm them, and review run history. | staff |
+| `/staff/invoices` | Find invoices and track their payment status. | staff |
+| `/staff/invoices/[id]` | Review an invoice, record a payment, print it, send it, cancel it. | staff |
+| `/staff/finance` | Invoiced, collected, outstanding, collections by method, largest overdue. | staff |
+| `/portal` | Summary of the customer's subscriptions, balance and recent invoices. | customer |
+| `/portal/subscriptions` | The customer's own subscriptions. | customer |
+| `/portal/invoices` | The customer's own invoices and balances. | customer |
+| `/portal/invoices/[id]` | One invoice, with a print view. A foreign id returns 404. | customer |
+| `/api/jobs/billing-run` | `POST` with an `x-job-secret` header to run billing from a scheduler. | secret |
 
 ## How it is put together
 
@@ -133,9 +169,8 @@ Two guarantees are enforced by the database rather than by remembering to check:
 
 The billing run itself (`src/server/billing.ts`) takes every active subscription whose next billing
 date is on or before the run date, so a day the job did not run is caught up on the next one. Work is
-done in batches of 100 with one transaction per batch, which keeps a run over hundreds of
-subscriptions to a couple of seconds; anything already invoiced for that period is counted as
-skipped, so re-running the same date is harmless.
+done in batches of 100 with one transaction per batch; anything already invoiced for that period is
+counted as skipped, so re-running the same date is harmless.
 
 ```
 prisma/
@@ -156,6 +191,57 @@ tests/
   core/                      pricing, money, periods, discounts, status rules
   server/                    priceSubscription (period end, due date, tax)
 ```
+
+## Technical details
+
+**Money never touches a float.** Every amount in every table and every function is an integer number
+of paise; every percentage is basis points, so 18% GST is `1800` and a 7.5% discount is `750`.
+Converting to rupees happens once, at render. Nothing can drift by a rounding error, and
+`allocateProRata` distributes a discount across lines so the parts add up to the whole exactly —
+the remainder is handed out a paise at a time, never dropped.
+
+**One pricing function, three callers.** The quotation a customer is shown, the billing preview, and
+the invoice that is finally issued all call `priceDocument`. There is no second implementation to
+disagree with the first. The order of operations is fixed and tested: variant price → line discount →
+subscription-level discount spread pro-rata → tax on the discounted amount → totals.
+
+**The billing run is catch-up, batched and idempotent.** It selects everything due on or before the
+run date, so a missed day is picked up on the next run rather than lost. It writes one transaction per
+100 invoices. Re-running the same date creates nothing: the unique constraint rejects the duplicate
+and the run reports it as skipped rather than as an error. A dry run prices everything and writes
+nothing.
+
+**Invoice numbering is gap-free on purpose.** A Postgres sequence advances even when a transaction
+rolls back, which leaves holes in a legal document series. Numbers are therefore taken from a
+`counters` row inside the confirming transaction, `UPDATE … RETURNING`, so a number is only consumed
+if the invoice is actually written.
+
+**Authorisation is server-side.** Three route-group layouts call `requireRole` before rendering, and
+every server action re-checks the role before touching data — a form posted by hand to an admin
+action is refused. The customer portal filters every query on the session's customer id, and a
+request for someone else's invoice returns 404 rather than an empty page.
+
+**Sessions.** Passwords are bcrypt hashes; the session is a signed JWT in an `httpOnly` cookie, so
+there is no session table to keep in sync. Password resets use a single-use token with a 30-minute
+expiry, and the new password is written only when the token is consumed.
+
+**Dates are timezone-aware where it matters.** Billing dates are calendar dates, not instants; the
+"today" used by the billing run is computed in IST, so a run at 02:00 local does not bill the previous
+day.
+
+**Scale of the demo data.** 60 customers, 6 products with variants, 5 plans, 3 discounts, 1 quotation
+template, 1,200 subscriptions — 400 of them due on the demo date — 2,100 invoices and 1,494 payments,
+across 17 tables. A billing preview over the 400 due subscriptions prices every line and returns in
+about four seconds against a database in another region.
+
+**Tested where it counts.** 61 tests, all against the pure engine and the billing service, with no
+database and no browser: the order of operations in pricing, discount eligibility and limits,
+month-end clamping in period maths (31 Jan → 28 Feb → 31 Mar, not 28 Mar), pro-rata allocation,
+every allowed and refused status transition, and the derivation of invoice status from the money paid
+and the due date.
+
+**CI on every push.** `.github/workflows/ci.yml` runs typecheck, the full test suite and a production
+build on `main`.
 
 ## Data model
 
@@ -233,7 +319,10 @@ npm test          # or: npm run verify
 - **No online payment gateway.** Payments are recorded by staff against an invoice with method,
   amount, date and note. Nothing is collected through the app. "Send invoice" records that it was
   sent; it does not email anything.
-- **Not deployed to a public URL.** It runs locally against a database you provide.
+- **Expiry is modelled but not enforced.** A subscription carries an expiry date and the plan an
+  `autoClose` switch, but nothing closes a subscription when it expires; staff close it explicitly.
+- **Tax rates are seed data.** The engine applies tax per product line, but there is no admin screen
+  for maintaining the tax table.
 
 ## Resetting the demo data
 
