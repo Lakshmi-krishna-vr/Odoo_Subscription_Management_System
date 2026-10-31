@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runBilling } from "@/server/billing";
+import { todayIso } from "@/core/periods";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
     // empty body is fine, defaults below
   }
 
-  const asOf = body.asOf ?? new Date().toISOString().slice(0, 10);
+  const asOf = body.asOf ?? todayIso();
 
   try {
     const result = await runBilling(asOf, { dryRun: body.dryRun ?? false });

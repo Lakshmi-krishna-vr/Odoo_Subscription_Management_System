@@ -78,3 +78,22 @@ export function daysBetween(from: string, to: string): number {
 export function isDue(nextBillingDate: string, asOf: string): boolean {
   return nextBillingDate <= asOf;
 }
+
+/**
+ * Today's date in the business timezone, not UTC.
+ *
+ * `new Date().toISOString().slice(0, 10)` is the UTC date: in IST that is
+ * yesterday until 05:30, so a 02:00 billing run would look at the wrong day and
+ * create nothing. This is the only place "today" is decided.
+ */
+export function todayIso(
+  timeZone = "Asia/Kolkata",
+  now: Date = new Date(),
+): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}

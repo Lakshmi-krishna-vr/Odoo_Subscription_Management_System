@@ -3,7 +3,7 @@
 // Money is stored as integer paise everywhere. Percentages are basis points.
 // Three constraints carry most of the business rules:
 //   invoices  UNIQUE(subscription_id, period_start)  → nothing is billed twice
-//   users     UNIQUE(lower(email))                   → one account per email
+//   users     UNIQUE(email) — always stored lowercased → one account per email
 //   subs      INDEX(status, next_billing_date)       → the billing run's query
 
 generator client {

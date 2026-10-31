@@ -1,13 +1,14 @@
 import { InvoiceStatus } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
+import { todayIso } from "@/core/periods";
 import { prisma } from "@/server/db";
 import { BillingPanel } from "./billing-panel";
 
 export const dynamic = "force-dynamic";
 
 export default async function BillingPage() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
 
   const [drafts, confirmed, dueCount, lastRuns] = await Promise.all([
     prisma.invoice.count({ where: { status: InvoiceStatus.draft } }),

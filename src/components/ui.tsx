@@ -77,6 +77,7 @@ export function Shell({
     { href: "/", label: "Home" },
     { href: "/admin", label: "Admin" },
     { href: "/staff", label: "Staff" },
+    { href: "/staff/invoices", label: "Invoices" },
     { href: "/staff/billing", label: "Billing" },
     { href: "/portal", label: "Customer portal" },
   ];
