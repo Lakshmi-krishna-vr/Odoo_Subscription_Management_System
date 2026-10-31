@@ -15,10 +15,20 @@ export default async function ProductsPage() {
       <PageHeader
         title="Products"
         subtitle="Catalogue of what Brightloop sells, with variants and the tax each line attracts."
-        right={<Badge>{products.length} in catalogue</Badge>}
+        right={
+          <div className="flex items-center gap-3">
+            <Badge>{products.length} in catalogue</Badge>
+            <a
+              href="/admin/products/new"
+              className="rounded-lg bg-[#1f5eff] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1a51d8]"
+            >
+              New product
+            </a>
+          </div>
+        }
       />
 
-      <Card title="Catalogue" description="Read-only view. Prices are stored in paise and shown in rupees.">
+      <Card title="Catalogue" description="Prices are stored in paise and shown in rupees.">
         <p className="mb-3 text-sm text-[var(--muted)]">
           {products.length} {products.length === 1 ? "product" : "products"}
         </p>
