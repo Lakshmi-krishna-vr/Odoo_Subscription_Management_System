@@ -48,10 +48,20 @@ export default async function PlansPage() {
       <PageHeader
         title="Plans"
         subtitle="Billing frequency, availability window and the four subscription policies."
-        right={<Badge>{plans.length} plans</Badge>}
+        right={
+          <div className="flex items-center gap-3">
+            <Badge>{plans.length} plans</Badge>
+            <a
+              href="/admin/plans/new"
+              className="rounded-lg bg-[#1f5eff] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1a51d8]"
+            >
+              New plan
+            </a>
+          </div>
+        }
       />
 
-      <Card title="Subscription plans" description="Read-only view of the plan catalogue.">
+      <Card title="Subscription plans" description="Prices are stored in paise and shown in rupees.">
         <p className="mb-3 text-sm text-[var(--muted)]">
           {plans.length} {plans.length === 1 ? "plan" : "plans"}
         </p>
