@@ -3,6 +3,7 @@ import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
 import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
+import { invoiceDisplayStatus } from "@/server/invoices";
 import { InvoiceActions } from "./invoice-actions";
 import { PaymentForm } from "./payment-form";
 import { PrintButton } from "./print-button";
@@ -79,7 +80,14 @@ export default async function InvoiceDetailPage({
         <SectionTitle>Customer and document</SectionTitle>
         <div className="grid gap-6 sm:grid-cols-2">
           <dl className="grid gap-2 text-sm">
-            <Detail label="Company">{customer.companyName}</Detail>
+            <Detail label="Company">
+              <a
+                href={`/staff/customers/${customer.id}`}
+                className="font-medium text-[#1f5eff] hover:underline"
+              >
+                {customer.companyName}
+              </a>
+            </Detail>
             <Detail label="Contact">{customer.contactName}</Detail>
             <Detail label="Email">{customer.email}</Detail>
             <Detail label="Address">{customer.address ?? "—"}</Detail>
@@ -106,7 +114,7 @@ export default async function InvoiceDetailPage({
             </Detail>
             <Detail label="Plan">{subscription?.plan.name ?? "—"}</Detail>
             <Detail label="Status">
-              <Badge>{invoice.status}</Badge>
+              <Badge>{invoiceDisplayStatus(invoice)}</Badge>
             </Detail>
             <Detail label="Sent">
               {invoice.sentAt ? `Sent on ${formatDate(invoice.sentAt)}` : "Not sent yet"}
