@@ -3,7 +3,12 @@
 import { revalidatePath } from "next/cache";
 import type { SubEvent } from "@/contracts";
 import { requireRole } from "@/server/auth";
-import { SUBSCRIPTION_EVENTS, changeSubscriptionStatus } from "@/server/subscriptions";
+import {
+  SUBSCRIPTION_EVENTS,
+  changeSubscriptionStatus,
+  updateSubscriptionLines,
+  type LineChange,
+} from "@/server/subscriptions";
 
 export interface SubscriptionActionState {
   error?: string;
@@ -45,5 +50,46 @@ export async function changeSubscriptionAction(
     return { message: SUCCESS_MESSAGE[event] };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "That change failed." };
+  }
+}
+
+const LINE_CHANGE_MESSAGE: Record<LineChange["kind"], string> = {
+  quantity: "Quantity saved.",
+  remove: "Line removed.",
+  add: "Line added.",
+};
+
+function readLineChange(formData: FormData): LineChange | null {
+  const kind = String(formData.get("change") ?? "");
+  const lineId = String(formData.get("lineId") ?? "");
+  const quantity = Number(String(formData.get("quantity") ?? ""));
+
+  if (kind === "quantity" && UUID.test(lineId)) return { kind, lineId, quantity };
+  if (kind === "remove" && UUID.test(lineId)) return { kind, lineId };
+  if (kind === "add") {
+    const productId = String(formData.get("productId") ?? "");
+    const variantId = String(formData.get("variantId") ?? "");
+    if (!UUID.test(productId)) return null;
+    return { kind, productId, variantId: UUID.test(variantId) ? variantId : null, quantity };
+  }
+  return null;
+}
+
+export async function changeLinesAction(
+  _previousState: SubscriptionActionState,
+  formData: FormData,
+): Promise<SubscriptionActionState> {
+  await requireRole(["admin", "staff"]);
+  const subscriptionId = String(formData.get("subscriptionId") ?? "").trim();
+  if (!UUID.test(subscriptionId)) return { error: "Subscription not found." };
+  const lineChange = readLineChange(formData);
+  if (!lineChange) return { error: "Choose a product and a quantity." };
+
+  try {
+    await updateSubscriptionLines(subscriptionId, lineChange);
+    revalidatePath(`/staff/subscriptions/${subscriptionId}`);
+    return { message: LINE_CHANGE_MESSAGE[lineChange.kind] };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "The lines were not changed." };
   }
 }

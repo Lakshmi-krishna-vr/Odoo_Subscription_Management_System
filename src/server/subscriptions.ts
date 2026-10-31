@@ -373,6 +373,102 @@ export async function previewNextInvoice(subscription: {
   });
 }
 
+interface RequestedLine {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+}
+
+async function buildSubscriptionLines(
+  tx: Prisma.TransactionClient,
+  requestedLines: RequestedLine[],
+  firstLinePlanPrice: number | null,
+) {
+  const variantIds = requestedLines
+    .map((line) => line.variantId)
+    .filter((variantId): variantId is string => variantId !== null);
+  const [products, variants] = await Promise.all([
+    tx.product.findMany({
+      where: { id: { in: requestedLines.map((line) => line.productId) }, isActive: true },
+      select: { id: true, salesPrice: true, taxId: true },
+    }),
+    tx.productVariant.findMany({
+      where: { id: { in: variantIds }, isActive: true },
+      select: { id: true, productId: true, extraPrice: true },
+    }),
+  ]);
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const variantById = new Map(variants.map((variant) => [variant.id, variant]));
+
+  return requestedLines.map((line, lineIndex) => {
+    const product = productById.get(line.productId);
+    if (!product) throw new Error("That product is not available any more.");
+    const variant = line.variantId ? variantById.get(line.variantId) : null;
+    if (line.variantId && (!variant || variant.productId !== line.productId)) {
+      throw new Error("That variant is not available for this product.");
+    }
+    const basePrice =
+      lineIndex === 0 && firstLinePlanPrice !== null ? firstLinePlanPrice : product.salesPrice;
+    return {
+      productId: line.productId,
+      variantId: line.variantId,
+      quantity: line.quantity,
+      unitPrice: basePrice + (variant?.extraPrice ?? 0),
+      taxId: product.taxId,
+    };
+  });
+}
+
+export type LineChange =
+  | { kind: "quantity"; lineId: string; quantity: number }
+  | { kind: "remove"; lineId: string }
+  | { kind: "add"; productId: string; variantId: string | null; quantity: number };
+
+export async function updateSubscriptionLines(
+  subscriptionId: string,
+  change: LineChange,
+): Promise<void> {
+  if (change.kind !== "remove" && (!Number.isInteger(change.quantity) || change.quantity < 1)) {
+    throw new Error("Quantity must be a whole number of at least 1.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const editable = await tx.subscription.updateMany({
+      where: { id: subscriptionId, status: { in: ["draft", "quotation"] } },
+      data: { updatedAt: new Date() },
+    });
+    if (editable.count === 0) {
+      throw new Error("Lines can only be changed before the subscription is confirmed.");
+    }
+
+    if (change.kind === "quantity") {
+      const updated = await tx.subscriptionLine.updateMany({
+        where: { id: change.lineId, subscriptionId },
+        data: { quantity: change.quantity },
+      });
+      if (updated.count === 0) throw new Error("That line no longer exists. Reload and retry.");
+      return;
+    }
+
+    if (change.kind === "remove") {
+      const lineCount = await tx.subscriptionLine.count({ where: { subscriptionId } });
+      if (lineCount <= 1) throw new Error("A subscription needs at least one line.");
+      const removed = await tx.subscriptionLine.deleteMany({
+        where: { id: change.lineId, subscriptionId },
+      });
+      if (removed.count === 0) throw new Error("That line no longer exists. Reload and retry.");
+      return;
+    }
+
+    const [newLine] = await buildSubscriptionLines(
+      tx,
+      [{ productId: change.productId, variantId: change.variantId, quantity: change.quantity }],
+      null,
+    );
+    await tx.subscriptionLine.create({ data: { ...newLine, subscriptionId } });
+  });
+}
+
 export async function startSubscriptionFromTemplate(details: {
   customerId: string;
   templateId: string;
@@ -395,35 +491,7 @@ export async function startSubscriptionFromTemplate(details: {
     if (!template) throw new Error("Choose an active quotation template.");
     if (template.lines.length === 0) throw new Error("This template has no lines.");
 
-    const variantIds = template.lines
-      .map((line) => line.variantId)
-      .filter((variantId): variantId is string => variantId !== null);
-    const [products, variants] = await Promise.all([
-      tx.product.findMany({
-        where: { id: { in: template.lines.map((line) => line.productId) } },
-        select: { id: true, salesPrice: true, taxId: true },
-      }),
-      tx.productVariant.findMany({
-        where: { id: { in: variantIds } },
-        select: { id: true, extraPrice: true },
-      }),
-    ]);
-    const productById = new Map(products.map((product) => [product.id, product]));
-    const extraPriceByVariant = new Map(variants.map((variant) => [variant.id, variant.extraPrice]));
-
-    const subscriptionLines = template.lines.map((line, lineIndex) => {
-      const product = productById.get(line.productId);
-      if (!product) throw new Error("A product on this template no longer exists.");
-      const basePrice = lineIndex === 0 ? template.plan.price : product.salesPrice;
-      const extraPrice = line.variantId ? (extraPriceByVariant.get(line.variantId) ?? 0) : 0;
-      return {
-        productId: line.productId,
-        variantId: line.variantId,
-        quantity: line.quantity,
-        unitPrice: basePrice + extraPrice,
-        taxId: product.taxId,
-      };
-    });
+    const subscriptionLines = await buildSubscriptionLines(tx, template.lines, template.plan.price);
 
     const counter = await tx.counter.upsert({
       where: { key: SUBSCRIPTION_COUNTER_KEY },
