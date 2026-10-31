@@ -249,6 +249,19 @@ export async function runBilling(
         if (lines.length > 0) await tx.invoiceLine.createMany({ data: lines });
         if (redemptionRows.length > 0) {
           await tx.discountRedemption.createMany({ data: redemptionRows });
+
+          // count every redemption, so a usage limit of 5 actually stops after
+          // 5 invoices instead of applying to everything in the run
+          const perDiscount = new Map<string, number>();
+          for (const row of redemptionRows) {
+            perDiscount.set(row.discountId, (perDiscount.get(row.discountId) ?? 0) + 1);
+          }
+          for (const [discountId, count] of perDiscount) {
+            await tx.discount.updateMany({
+              where: { id: discountId },
+              data: { usedCount: { increment: count } },
+            });
+          }
         }
 
         // advance every subscription in one statement
@@ -273,6 +286,11 @@ export async function runBilling(
       });
 
       result.created += todo.length;
+
+      for (const row of redemptionRows) {
+        const key = `${row.discountId}:${row.customerId}`;
+        redemptionCount.set(key, (redemptionCount.get(key) ?? 0) + 1);
+      }
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -333,25 +351,29 @@ export async function confirmDraftInvoices(limit = 1000): Promise<number> {
   });
   if (drafts.length === 0) return 0;
 
-  const counter = await prisma.counter.upsert({
-    where: { key: "INV-2026" },
-    create: { key: "INV-2026", lastNo: drafts.length },
-    update: { lastNo: { increment: drafts.length } },
+  // the counter and the invoices move together: if the update fails, the
+  // numbers must not be burned
+  await prisma.$transaction(async (tx) => {
+    const counter = await tx.counter.upsert({
+      where: { key: "INV-2026" },
+      create: { key: "INV-2026", lastNo: drafts.length },
+      update: { lastNo: { increment: drafts.length } },
+    });
+
+    const start = counter.lastNo - drafts.length + 1;
+    const values = Prisma.join(
+      drafts.map(
+        (draft, index) =>
+          Prisma.sql`(${draft.id}::uuid, ${`INV-2026-${String(start + index).padStart(5, "0")}`})`,
+      ),
+    );
+
+    await tx.$executeRaw`
+      UPDATE invoices AS i
+         SET status = 'confirmed', number = v.number
+        FROM (VALUES ${values}) AS v(id, number)
+       WHERE i.id = v.id AND i.number IS NULL`;
   });
-
-  const start = counter.lastNo - drafts.length + 1;
-  const values = Prisma.join(
-    drafts.map(
-      (draft, index) =>
-        Prisma.sql`(${draft.id}::uuid, ${`INV-2026-${String(start + index).padStart(5, "0")}`})`,
-    ),
-  );
-
-  await prisma.$executeRaw`
-    UPDATE invoices AS i
-       SET status = 'confirmed', number = v.number
-      FROM (VALUES ${values}) AS v(id, number)
-     WHERE i.id = v.id AND i.number IS NULL`;
 
   return drafts.length;
 }
