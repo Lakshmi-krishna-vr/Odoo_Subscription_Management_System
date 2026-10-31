@@ -109,11 +109,34 @@ export default function AdminPage() {
         </dl>
       </Card>
 
-      <Card title="Next on this surface">
-        <ul className="space-y-2 text-sm text-[var(--muted)]">
-          <li>Sign-in and role-based access, with staff accounts created by the admin.</li>
-          <li>Products with variants, plans with billing frequency and the four plan policies.</li>
-          <li>Tax rules and discount rules with their limits.</li>
+      <Card title="Administer">
+        <ul className="space-y-2 text-sm">
+          <li>
+            <a className="font-medium text-[#1f5eff] hover:underline" href="/admin/staff">
+              Staff accounts
+            </a>
+            <span className="text-[var(--muted)]">
+              {" "}— add a member of staff and deactivate one. Only the admin can do this.
+            </span>
+          </li>
+          <li>
+            <a className="font-medium text-[#1f5eff] hover:underline" href="/admin/products">
+              Products
+            </a>
+            <span className="text-[var(--muted)]"> — variants, prices and tax.</span>
+          </li>
+          <li>
+            <a className="font-medium text-[#1f5eff] hover:underline" href="/admin/plans">
+              Plans
+            </a>
+            <span className="text-[var(--muted)]"> — billing frequency and the four policies.</span>
+          </li>
+          <li>
+            <a className="font-medium text-[#1f5eff] hover:underline" href="/admin/discounts">
+              Discounts
+            </a>
+            <span className="text-[var(--muted)]"> — fixed or percentage, with their limits.</span>
+          </li>
         </ul>
       </Card>
     </Shell>
