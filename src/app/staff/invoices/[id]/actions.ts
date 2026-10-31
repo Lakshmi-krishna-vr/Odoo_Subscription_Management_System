@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireRole } from "@/server/auth";
-import { cancelInvoice, confirmInvoice } from "@/server/invoices";
+import { cancelInvoice, confirmInvoice, sendInvoice } from "@/server/invoices";
 
 export interface InvoiceActionState {
   error?: string;
@@ -52,5 +52,22 @@ export async function cancelInvoiceAction(
     return { message: "Invoice cancelled." };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Cancel failed." };
+  }
+}
+
+export async function sendInvoiceAction(
+  _previousState: InvoiceActionState,
+  formData: FormData,
+): Promise<InvoiceActionState> {
+  await requireRole(["admin", "staff"]);
+  const invoiceId = readInvoiceId(formData);
+  if (!invoiceId) return { error: "Invoice not found." };
+
+  try {
+    await sendInvoice(invoiceId);
+    refreshInvoicePages(invoiceId);
+    return { message: "Invoice marked as sent." };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Send failed." };
   }
 }

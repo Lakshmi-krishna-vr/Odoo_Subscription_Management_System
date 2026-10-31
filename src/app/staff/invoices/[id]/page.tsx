@@ -92,10 +92,24 @@ export default async function InvoiceDetailPage({
             <Detail label="Period">
               {formatDate(invoice.periodStart)} to {formatDate(invoice.periodEnd)}
             </Detail>
-            <Detail label="Subscription">{subscription?.number ?? "—"}</Detail>
+            <Detail label="Subscription">
+              {subscription ? (
+                <a
+                  href={`/staff/subscriptions/${subscription.id}`}
+                  className="font-medium text-[#1f5eff] hover:underline"
+                >
+                  {subscription.number}
+                </a>
+              ) : (
+                "—"
+              )}
+            </Detail>
             <Detail label="Plan">{subscription?.plan.name ?? "—"}</Detail>
             <Detail label="Status">
               <Badge>{invoice.status}</Badge>
+            </Detail>
+            <Detail label="Sent">
+              {invoice.sentAt ? `Sent on ${formatDate(invoice.sentAt)}` : "Not sent yet"}
             </Detail>
           </dl>
         </div>
