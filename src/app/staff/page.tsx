@@ -1,4 +1,4 @@
-import { Badge, Card, PageHeader, Shell } from "@/components/ui";
+import { Badge, PageHeader, Shell } from "@/components/ui";
 
 export default function StaffPage() {
   return (
@@ -9,14 +9,11 @@ export default function StaffPage() {
         right={<Badge>shell</Badge>}
       />
 
-      <Card title="What this surface will do">
-        <ul className="space-y-2 text-sm text-[var(--muted)]">
-          <li>Start a quotation from a template and turn it into a subscription.</li>
-          <li>Run billing for every subscription that is due, preview first, then commit.</li>
-          <li>Confirm, cancel, send and print invoices; record payments against them.</li>
-          <li>See what is paid and what is outstanding, so overdue accounts get chased.</li>
-        </ul>
-      </Card>
+      <ul className="space-y-2 text-sm">
+        <li><a href="/staff/invoices" className="font-medium text-[#1f5eff] hover:underline">Invoices</a></li>
+        <li><a href="/staff/subscriptions" className="font-medium text-[#1f5eff] hover:underline">Subscriptions</a></li>
+        <li><a href="/staff/billing" className="font-medium text-[#1f5eff] hover:underline">Billing</a></li>
+      </ul>
     </Shell>
   );
 }
