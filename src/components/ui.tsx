@@ -33,7 +33,7 @@ export function Card({
   children: ReactNode;
 }) {
   return (
-    <section className="overflow-x-auto rounded-2xl border border-[var(--border)] bg-white p-4 shadow-[var(--shadow-soft)] sm:p-5">
+    <section className="overflow-x-auto rounded-[20px] border border-[var(--border)] bg-white p-4 shadow-[var(--shadow-soft)] transition-shadow duration-200 hover:shadow-[var(--shadow-hover)] sm:p-5">
       {title ? (
         <header className="mb-4">
           <h2 className="text-base font-semibold tracking-tight">{title}</h2>
@@ -49,8 +49,7 @@ export function Card({
 
 export function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-[var(--border)] bg-white p-5 shadow-[var(--shadow-soft)]">
-      <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-[var(--accent)]" />
+    <div className="relative overflow-hidden rounded-[20px] border border-[var(--border)] bg-white p-5 shadow-[var(--shadow-soft)] transition-shadow duration-200 hover:shadow-[var(--shadow-hover)]">
       <div className="text-[11px] font-semibold uppercase tracking-[0.11em] text-[var(--muted)]">
         {label}
       </div>
@@ -61,7 +60,7 @@ export function Stat({ label, value }: { label: string; value: string }) {
 
 export function Badge({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-full border border-[#e9d979] bg-[#fff9d8] px-2.5 py-1 text-[11px] font-semibold capitalize tracking-wide text-[#5d4b00]">
+    <span className="inline-flex items-center rounded-[14px] border border-[var(--border)] bg-[#f7f7f7] px-2.5 py-1 text-[11px] font-semibold capitalize tracking-wide text-[var(--palette-text-focused)]">
       {children}
     </span>
   );
@@ -109,8 +108,8 @@ export function Shell({
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex shrink-0 items-center gap-3">
             <a href={role === "customer" ? "/portal" : role === "staff" ? "/staff" : role === "admin" ? "/admin" : "/"} className="inline-flex items-center gap-2 text-[15px] font-bold tracking-[-0.04em]">
-              <span aria-hidden="true" className="grid h-7 w-7 place-items-center rounded-lg bg-[var(--accent)] text-xs font-black">B</span>
-              Brightloop<span className="-ml-2 text-[#d1b600]">.</span>
+              <span aria-hidden="true" className="grid h-7 w-7 place-items-center rounded-full bg-[var(--accent)] text-xs font-black text-white">B</span>
+              Brightloop<span className="-ml-2 text-[var(--accent)]">.</span>
             </a>
             <Badge>{role}</Badge>
           </div>
@@ -125,7 +124,7 @@ export function Shell({
             <form action={logoutAction}>
               <button
                 type="submit"
-                className="rounded-full border border-[var(--border)] px-3.5 py-2 text-xs font-semibold hover:border-[#c4ac00] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                className="rounded-lg border border-[var(--border)] px-3.5 py-2 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--foreground)]"
               >
                 Sign out
               </button>
