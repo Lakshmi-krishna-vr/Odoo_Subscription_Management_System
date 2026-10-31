@@ -26,3 +26,7 @@ yarn-error.log*
 .vercel
 *.tsbuildinfo
 
+# tooling artefacts that are not part of the app
+.claude/
+repomix-output.xml
+skills-lock.json

@@ -1,19 +1,31 @@
-import { Badge, PageHeader, Shell } from "@/components/ui";
+import { Badge, Card, PageHeader, Shell } from "@/components/ui";
+
+const LINKS = [
+  { href: "/staff/quotations", label: "Quotations", body: "Start an offer from a template and move it to a live subscription." },
+  { href: "/staff/subscriptions", label: "Subscriptions", body: "Every subscription, its plan, status and next billing date." },
+  { href: "/staff/invoices", label: "Invoices", body: "Confirm, cancel, print and record payments against an invoice." },
+  { href: "/staff/billing", label: "Billing run", body: "Preview the invoices that are due, then create them in one go." },
+  { href: "/staff/finance", label: "Finance", body: "Invoiced, collected, outstanding and the largest overdue accounts." },
+];
 
 export default function StaffPage() {
   return (
     <Shell role="staff">
       <PageHeader
         title="Staff"
-        subtitle="Day-to-day operations: quotations, subscriptions, billing and payments."
-        right={<Badge>shell</Badge>}
+        subtitle="Day-to-day operations: subscriptions, invoices, billing and finance."
+        right={<Badge>workspace</Badge>}
       />
 
-      <ul className="space-y-2 text-sm">
-        <li><a href="/staff/invoices" className="font-medium text-[#1f5eff] hover:underline">Invoices</a></li>
-        <li><a href="/staff/subscriptions" className="font-medium text-[#1f5eff] hover:underline">Subscriptions</a></li>
-        <li><a href="/staff/billing" className="font-medium text-[#1f5eff] hover:underline">Billing</a></li>
-      </ul>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {LINKS.map((link) => (
+          <a key={link.href} href={link.href}>
+            <Card title={link.label}>
+              <p className="text-sm text-[var(--muted)]">{link.body}</p>
+            </Card>
+          </a>
+        ))}
+      </div>
     </Shell>
   );
 }

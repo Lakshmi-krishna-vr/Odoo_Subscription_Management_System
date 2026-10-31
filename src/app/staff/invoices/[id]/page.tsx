@@ -4,6 +4,7 @@ import { formatINR } from "@/core/money";
 import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
 import { InvoiceActions } from "./invoice-actions";
+import { PaymentForm } from "./payment-form";
 import { PrintButton } from "./print-button";
 
 export const dynamic = "force-dynamic";
@@ -196,6 +197,16 @@ export default async function InvoiceDetailPage({
           </tbody>
         </table>
         {/* payment form — Seb */}
+        <div className="mt-5 border-t border-[var(--border)] pt-4">
+          <SectionTitle>Record a payment</SectionTitle>
+          <PaymentForm
+            invoiceId={invoice.id}
+            balance={balanceDue}
+            disabled={
+              invoice.status === "cancelled" || !invoice.number || balanceDue === 0
+            }
+          />
+        </div>
       </Card>
 
       {invoice.redemptions.length > 0 ? (

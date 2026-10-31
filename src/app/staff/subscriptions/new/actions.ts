@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireRole } from "@/server/auth";
-import { createSubscriptionFromTemplate } from "@/server/subscriptions";
+import { startSubscriptionFromTemplate } from "@/server/subscriptions";
 
 export interface NewSubscriptionState {
   error?: string;
@@ -29,7 +29,7 @@ export async function createSubscriptionAction(
 
   let subscriptionId: string;
   try {
-    const subscription = await createSubscriptionFromTemplate({
+    const subscription = await startSubscriptionFromTemplate({
       customerId,
       templateId,
       startDate,
