@@ -1,6 +1,8 @@
+import type { InvoiceStatus } from "@prisma/client";
 import { prisma } from "@/server/db";
 
 const COUNTER_KEY = "INV-2026";
+const SENDABLE_STATUSES: InvoiceStatus[] = ["confirmed", "partially_paid", "paid", "overdue"];
 
 export async function confirmInvoice(invoiceId: string): Promise<{ number: string }> {
   return prisma.$transaction(async (tx) => {
@@ -53,4 +55,27 @@ export async function cancelInvoice(invoiceId: string): Promise<void> {
   if (cancelResult.count === 0) {
     throw new Error("That invoice changed while you were cancelling it. Reload and try again.");
   }
+}
+
+export async function sendInvoice(invoiceId: string): Promise<{ sentAt: Date }> {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { status: true, number: true },
+  });
+  if (!invoice) throw new Error("Invoice not found.");
+  if (invoice.status === "draft" || !invoice.number) {
+    throw new Error("Confirm the invoice before sending it.");
+  }
+  if (invoice.status === "cancelled") throw new Error("A cancelled invoice cannot be sent.");
+
+  const sentAt = new Date();
+  const sendResult = await prisma.invoice.updateMany({
+    where: { id: invoiceId, number: { not: null }, status: { in: SENDABLE_STATUSES } },
+    data: { sentAt },
+  });
+  if (sendResult.count === 0) {
+    throw new Error("That invoice changed while you were sending it. Reload and try again.");
+  }
+
+  return { sentAt };
 }

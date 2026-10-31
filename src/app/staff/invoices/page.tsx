@@ -215,7 +215,10 @@ export default async function StaffInvoicesPage({
                     <td>{formatDate(invoice.invoiceDate)}</td>
                     <td>{formatDate(invoice.dueDate)}</td>
                     <td>
-                      <Badge>{invoice.status}</Badge>
+                      <span className="flex flex-wrap gap-1">
+                        <Badge>{invoice.status}</Badge>
+                        {invoice.sentAt ? <Badge>Sent</Badge> : null}
+                      </span>
                     </td>
                     <td className="num">{formatINR(invoice.total)}</td>
                     <td className="num">{formatINR(invoice.amountPaid)}</td>
