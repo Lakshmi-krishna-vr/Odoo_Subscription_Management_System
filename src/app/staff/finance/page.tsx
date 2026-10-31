@@ -7,10 +7,17 @@ import type { DashboardKpis } from "@/contracts";
 
 export const dynamic = "force-dynamic";
 
-function monthRange(today: string): { from: Date; to: Date } {
+function monthRange(month: string): { from: Date; to: Date; label: string } {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   return {
-    from: new Date(`${today.slice(0, 7)}-01T00:00:00Z`),
-    to: new Date(`${today}T23:59:59Z`),
+    from: new Date(`${month}-01T00:00:00Z`),
+    to: new Date(`${month}-${String(lastDay).padStart(2, "0")}T23:59:59Z`),
+    label: new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-GB", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    }),
   };
 }
 
@@ -22,9 +29,15 @@ function formatDay(value: Date): string {
   });
 }
 
-export default async function FinancePage() {
+export default async function FinancePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string }>;
+}) {
   const today = todayIso();
-  const { from, to } = monthRange(today);
+  const requested = (await searchParams).month;
+  const month = requested && /^\d{4}-\d{2}$/.test(requested) ? requested : today.slice(0, 7);
+  const { from, to, label } = monthRange(month);
 
   const [
     activeSubscriptions,
@@ -84,20 +97,36 @@ export default async function FinancePage() {
     <Shell role="staff">
       <PageHeader
         title="Finance"
-        subtitle={`Invoiced and collected this month (from ${formatDay(from)}).`}
-        right={<Badge>{overdueCount} overdue</Badge>}
+        subtitle={`Invoiced and collected in ${label}.`}
+        right={
+          <form method="get" className="flex items-center gap-2">
+            <input
+              type="month"
+              name="month"
+              defaultValue={month}
+              className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs"
+            />
+            <button
+              type="submit"
+              className="rounded-lg border border-[var(--border)] bg-white px-2.5 py-1 text-xs hover:border-[#1f5eff]"
+            >
+              Apply
+            </button>
+            <Badge>{overdueCount} overdue</Badge>
+          </form>
+        }
       />
 
       <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Stat label="Active subscriptions" value={String(kpis.activeSubscriptions)} />
-        <Stat label="Invoiced this month" value={formatINR(kpis.invoicedInPeriod)} />
-        <Stat label="Collected this month" value={formatINR(kpis.collectedInPeriod)} />
+        <Stat label="Invoiced in period" value={formatINR(kpis.invoicedInPeriod)} />
+        <Stat label="Collected in period" value={formatINR(kpis.collectedInPeriod)} />
         <Stat label="Outstanding" value={formatINR(kpis.outstanding)} />
         <Stat label="Overdue invoices" value={String(kpis.overdueCount)} />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Collected by method" description="Payments received this month.">
+        <Card title="Collected by method" description={`Payments received in ${label}.`}>
           {byMethod.length === 0 ? (
             <p className="text-sm text-[var(--muted)]">No payments this month yet.</p>
           ) : (
