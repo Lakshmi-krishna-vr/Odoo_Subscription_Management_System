@@ -1,9 +1,12 @@
+import type { Metadata } from "next";
 import { Card, PageHeader, Shell } from "@/components/ui";
 import { todayIso } from "@/core/periods";
 import { prisma } from "@/server/db";
 import { NewSubscriptionForm, type TemplateOption } from "./form";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "New subscription · Brightloop" };
 
 export default async function NewSubscriptionPage() {
   const [customers, templates] = await Promise.all([

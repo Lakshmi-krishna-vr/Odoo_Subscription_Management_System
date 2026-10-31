@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 
 const LINKS = [
@@ -8,6 +9,8 @@ const LINKS = [
   { href: "/staff/billing", label: "Billing run", body: "Preview the invoices that are due, then create them in one go." },
   { href: "/staff/finance", label: "Finance", body: "Invoiced, collected, outstanding and the largest overdue accounts." },
 ];
+
+export const metadata: Metadata = { title: "Staff · Brightloop" };
 
 export default function StaffPage() {
   return (
