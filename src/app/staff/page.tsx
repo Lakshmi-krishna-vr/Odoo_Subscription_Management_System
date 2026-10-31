@@ -1,22 +1,30 @@
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 
+const LINKS = [
+  { href: "/staff/subscriptions", label: "Subscriptions", body: "Every subscription, its plan, status and next billing date." },
+  { href: "/staff/invoices", label: "Invoices", body: "Confirm, cancel, print and record payments against an invoice." },
+  { href: "/staff/billing", label: "Billing run", body: "Preview the invoices that are due, then create them in one go." },
+  { href: "/staff/finance", label: "Finance", body: "Invoiced, collected, outstanding and the largest overdue accounts." },
+];
+
 export default function StaffPage() {
   return (
     <Shell role="staff">
       <PageHeader
         title="Staff"
-        subtitle="Day-to-day operations: quotations, subscriptions, billing and payments."
-        right={<Badge>shell</Badge>}
+        subtitle="Day-to-day operations: subscriptions, invoices, billing and finance."
+        right={<Badge>workspace</Badge>}
       />
 
-      <Card title="What this surface will do">
-        <ul className="space-y-2 text-sm text-[var(--muted)]">
-          <li>Start a quotation from a template and turn it into a subscription.</li>
-          <li>Run billing for every subscription that is due, preview first, then commit.</li>
-          <li>Confirm, cancel, send and print invoices; record payments against them.</li>
-          <li>See what is paid and what is outstanding, so overdue accounts get chased.</li>
-        </ul>
-      </Card>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {LINKS.map((link) => (
+          <a key={link.href} href={link.href}>
+            <Card title={link.label}>
+              <p className="text-sm text-[var(--muted)]">{link.body}</p>
+            </Card>
+          </a>
+        ))}
+      </div>
     </Shell>
   );
 }
