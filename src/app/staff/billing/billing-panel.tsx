@@ -48,6 +48,7 @@ function Result({ state }: { state: BillingActionState }) {
               <tr>
                 <th>Subscription</th>
                 <th>Customer</th>
+                <th>Discount</th>
                 <th className="num">Invoice total</th>
               </tr>
             </thead>
@@ -56,6 +57,13 @@ function Result({ state }: { state: BillingActionState }) {
                 <tr key={row.subscriptionNumber}>
                   <td className="font-mono text-xs">{row.subscriptionNumber}</td>
                   <td>{row.customer}</td>
+                  <td className="text-xs">
+                    {row.appliedDiscounts && row.appliedDiscounts.length > 0
+                      ? row.appliedDiscounts
+                          .map((d) => `${d.name} (${inr(d.amount)})`)
+                          .join(", ")
+                      : "—"}
+                  </td>
                   <td className="num">{inr(row.total)}</td>
                 </tr>
               ))}

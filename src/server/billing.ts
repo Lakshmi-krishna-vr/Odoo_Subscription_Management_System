@@ -1,15 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, SubStatus, InvoiceStatus } from "@prisma/client";
 import { prisma } from "@/server/db";
-import { priceDocument } from "@/core/pricing";
-import { advance, periodEnd } from "@/core/periods";
-import type { DiscountRule, PriceLineInput, ProductRef, TaxRule } from "@/contracts";
+import { periodEnd } from "@/core/periods";
+import type { DiscountRule, TaxRule } from "@/contracts";
+import { priceSubscription } from "@/server/price-subscription";
+
+export { priceSubscription };
 
 export interface BillingPreviewRow {
   subscriptionNumber: string;
   customer: string;
   periodStart: string;
   total: number;
+  appliedDiscounts: {
+    discountId: string;
+    name: string;
+    amount: number;
+  }[];
 }
 
 export interface BillingRunResult {
@@ -34,11 +41,9 @@ const BATCH = 100;
 
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
 
-function addDaysIso(iso: string, days: number): string {
-  return new Date(new Date(`${iso}T00:00:00Z`).getTime() + days * 86_400_000)
-    .toISOString()
-    .slice(0, 10);
-}
+/** Current calendar date in Indian Standard Time. */
+export const todayIST = () =>
+  new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
 
 /**
  * Create the invoices that are due on `asOf`.
@@ -52,7 +57,7 @@ function addDaysIso(iso: string, days: number): string {
  */
 export async function runBilling(
   asOfInput: string,
-  options: { dryRun: boolean },
+  options: { dryRun: boolean; triggeredBy?: string },
 ): Promise<BillingRunResult> {
   const startedAt = Date.now();
   const asOf = new Date(`${asOfInput}T00:00:00Z`);
@@ -95,6 +100,30 @@ export async function runBilling(
     isActive: discount.isActive,
   }));
 
+  const discountNameById = new Map(discountRules.map((d) => [d.id, d.name]));
+
+  const runUse = new Map<string, number>();
+  const runTotal = new Map<string, number>();
+  const persistedCounts = new Map<string, number>();
+
+  const rulesFor = (customerId: string) =>
+    discountRules.filter((rule) => {
+      const before = redemptionCount.get(`${rule.id}:${customerId}`) ?? 0;
+      if (
+        rule.perCustomerLimit !== null &&
+        before + (runUse.get(`${rule.id}:${customerId}`) ?? 0) >= rule.perCustomerLimit
+      ) {
+        return false;
+      }
+      if (
+        rule.usageLimit !== null &&
+        rule.usedCount + (runTotal.get(rule.id) ?? 0) >= rule.usageLimit
+      ) {
+        return false;
+      }
+      return true;
+    });
+
   const result: BillingRunResult = {
     asOf: asOfInput,
     dryRun: options.dryRun,
@@ -123,42 +152,34 @@ export async function runBilling(
     result.considered += batch.length;
     const progressBefore = result.created + result.skipped;
 
+    const runUseBeforeBatch = new Map(runUse);
+    const runTotalBeforeBatch = new Map(runTotal);
+
     // price every subscription in the batch (pure, no I/O)
     const priced = batch.map((subscription) => {
-      const periodStart = subscription.nextBillingDate;
-      const startIso = isoDate(periodStart);
-      const endIso = periodEnd(
-        startIso,
-        subscription.plan.billingPeriod,
-        subscription.plan.intervalCount,
-        periodStart.getUTCDate(),
-      );
-
-      const lines: PriceLineInput[] = subscription.lines.map((line) => {
-        const product: ProductRef = {
-          id: line.productId,
-          name: "Subscription charge",
-          salesPrice: line.unitPrice,
-          taxId: line.taxId,
-        };
-        return { product, quantity: line.quantity };
-      });
-
+      const startIso = isoDate(subscription.nextBillingDate);
       const customerRedemptions: Record<string, number> = {};
       for (const rule of discountRules) {
         customerRedemptions[rule.id] =
-          redemptionCount.get(`${rule.id}:${subscription.customerId}`) ?? 0;
+          (redemptionCount.get(`${rule.id}:${subscription.customerId}`) ?? 0) +
+          (runUse.get(`${rule.id}:${subscription.customerId}`) ?? 0);
       }
 
-      const doc = priceDocument({
-        lines,
-        taxes: taxRules,
-        discounts: discountRules,
+      const pricedSubscription = priceSubscription({
+        subscription,
+        taxRules,
+        discountRules: rulesFor(subscription.customerId),
         customerRedemptions,
-        asOf: startIso,
+        periodStart: startIso,
       });
 
-      return { subscription, startIso, endIso, doc };
+      for (const applied of pricedSubscription.doc.appliedDiscounts) {
+        const key = `${applied.discountId}:${subscription.customerId}`;
+        runUse.set(key, (runUse.get(key) ?? 0) + 1);
+        runTotal.set(applied.discountId, (runTotal.get(applied.discountId) ?? 0) + 1);
+      }
+
+      return { subscription, ...pricedSubscription };
     });
 
     result.totalValue += priced.reduce((sum, row) => sum + row.doc.total, 0);
@@ -170,23 +191,34 @@ export async function runBilling(
           customer: row.subscription.customer.companyName,
           periodStart: row.startIso,
           total: row.doc.total,
+          appliedDiscounts: row.doc.appliedDiscounts.map((applied) => ({
+            discountId: applied.discountId,
+            name: discountNameById.get(applied.discountId) ?? "Discount",
+            amount: applied.amount,
+          })),
         });
       }
       continue;
     }
 
     // which of these already have an invoice for that period?
+    const periodStarts = priced.map((row) => new Date(`${row.startIso}T00:00:00Z`));
+    const desiredPairs = new Set(
+      priced.map((row) => `${row.subscription.id}:${row.startIso}`),
+    );
     const existing = await prisma.invoice.findMany({
       where: {
-        OR: priced.map((row) => ({
-          subscriptionId: row.subscription.id,
-          periodStart: new Date(`${row.startIso}T00:00:00Z`),
-        })),
+        subscriptionId: { in: priced.map((row) => row.subscription.id) },
+        periodStart: { in: periodStarts },
       },
       select: { subscriptionId: true, periodStart: true },
     });
     const alreadyInvoiced = new Set(
-      existing.map((row) => `${row.subscriptionId}:${isoDate(row.periodStart!)}`),
+      existing.flatMap((row) => {
+        if (!row.periodStart) return [];
+        const key = `${row.subscriptionId}:${isoDate(row.periodStart)}`;
+        return desiredPairs.has(key) ? [key] : [];
+      }),
     );
 
     const todo = priced.filter(
@@ -208,7 +240,7 @@ export async function runBilling(
       periodStart: new Date(`${row.startIso}T00:00:00Z`),
       periodEnd: new Date(`${row.endIso}T00:00:00Z`),
       invoiceDate: asOf,
-      dueDate: new Date(`${addDaysIso(row.startIso, row.subscription.paymentTermsDays)}T00:00:00Z`),
+      dueDate: new Date(`${row.dueIso}T00:00:00Z`),
       status: InvoiceStatus.draft,
       subtotal: row.doc.subtotal,
       discountTotal: row.doc.discountTotal,
@@ -250,17 +282,15 @@ export async function runBilling(
         if (redemptionRows.length > 0) {
           await tx.discountRedemption.createMany({ data: redemptionRows });
 
-          // count every redemption, so a usage limit of 5 actually stops after
-          // 5 invoices instead of applying to everything in the run
-          const perDiscount = new Map<string, number>();
-          for (const row of redemptionRows) {
-            perDiscount.set(row.discountId, (perDiscount.get(row.discountId) ?? 0) + 1);
-          }
-          for (const [discountId, count] of perDiscount) {
-            await tx.discount.updateMany({
-              where: { id: discountId },
-              data: { usedCount: { increment: count } },
-            });
+          for (const [discountId, total] of runTotal) {
+            const alreadyPersisted = persistedCounts.get(discountId) ?? 0;
+            const count = total - alreadyPersisted;
+            if (count > 0) {
+              await tx.discount.update({
+                where: { id: discountId },
+                data: { usedCount: { increment: count } },
+              });
+            }
           }
         }
 
@@ -285,26 +315,65 @@ export async function runBilling(
            WHERE s.id = v.id`;
       });
 
-      result.created += todo.length;
-
-      for (const row of redemptionRows) {
-        const key = `${row.discountId}:${row.customerId}`;
-        redemptionCount.set(key, (redemptionCount.get(key) ?? 0) + 1);
+      for (const [discountId, total] of runTotal) {
+        persistedCounts.set(discountId, total);
       }
+
+      result.created += todo.length;
     } catch (error) {
+      runUse.clear();
+      for (const [k, v] of runUseBeforeBatch) runUse.set(k, v);
+      runTotal.clear();
+      for (const [k, v] of runTotalBeforeBatch) runTotal.set(k, v);
+
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
       ) {
-        // a concurrent run got there first: fall back to one-by-one so the
-        // rest of the batch still lands
+        // A concurrent run can win the unique invoice constraint. Retry each
+        // subscription as a complete transaction so no invoice is left without
+        // its lines, redemptions, or advanced billing date.
         for (const row of todo) {
+          const invoice = invoices.find((inv) => inv.subscriptionId === row.subscription.id)!;
+          const rowLines = lines.filter((line) => line.invoiceId === invoice.id);
+          const rowRedemptions = redemptionRows.filter((redemption) => redemption.invoiceId === invoice.id);
           try {
-            await prisma.invoice.create({
-              data: {
-                ...invoices.find((inv) => inv.subscriptionId === row.subscription.id)!,
-              },
+            await prisma.$transaction(async (tx) => {
+              await tx.invoice.create({ data: invoice });
+              if (rowLines.length > 0) await tx.invoiceLine.createMany({ data: rowLines });
+              if (rowRedemptions.length > 0) {
+                await tx.discountRedemption.createMany({ data: rowRedemptions });
+                const counts = new Map<string, number>();
+                for (const redemption of rowRedemptions) {
+                  counts.set(redemption.discountId, (counts.get(redemption.discountId) ?? 0) + 1);
+                }
+                for (const [discountId, count] of counts) {
+                  await tx.discount.update({
+                    where: { id: discountId },
+                    data: { usedCount: { increment: count } },
+                  });
+                }
+              }
+              const nextPeriodEnd = periodEnd(
+                row.endIso,
+                row.subscription.plan.billingPeriod,
+                row.subscription.plan.intervalCount,
+              );
+              await tx.$executeRaw`
+                UPDATE subscriptions
+                   SET next_billing_date = ${row.endIso}::date,
+                       period_start = ${row.endIso}::date,
+                       period_end = ${nextPeriodEnd}::date,
+                       updated_at = now()
+                 WHERE id = ${row.subscription.id}::uuid`;
             });
+
+            for (const applied of row.doc.appliedDiscounts) {
+              const key = `${applied.discountId}:${row.subscription.customerId}`;
+              runUse.set(key, (runUse.get(key) ?? 0) + 1);
+              runTotal.set(applied.discountId, (runTotal.get(applied.discountId) ?? 0) + 1);
+              persistedCounts.set(applied.discountId, (persistedCounts.get(applied.discountId) ?? 0) + 1);
+            }
             result.created += 1;
           } catch (inner) {
             if (
@@ -334,6 +403,25 @@ export async function runBilling(
   }
 
   result.durationMs = Date.now() - startedAt;
+
+  try {
+    await prisma.billingRun.create({
+      data: {
+        asOf: new Date(`${asOfInput}T00:00:00Z`),
+        dryRun: options.dryRun,
+        considered: result.considered,
+        created: result.created,
+        skipped: result.skipped,
+        errorCount: result.errors.length,
+        totalValue: result.totalValue,
+        durationMs: result.durationMs,
+        triggeredBy: options.triggeredBy ?? "ui",
+      },
+    });
+  } catch (error) {
+    console.error("[billing] could not write the run log", error);
+  }
+
   return result;
 }
 

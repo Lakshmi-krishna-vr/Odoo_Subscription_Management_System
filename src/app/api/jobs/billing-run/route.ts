@@ -1,6 +1,6 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
-import { runBilling } from "@/server/billing";
-import { todayIso } from "@/core/periods";
+import { runBilling, todayIST } from "@/server/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,9 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
-  if (request.headers.get("x-job-secret") !== secret) {
+  const provided = Buffer.from(request.headers.get("x-job-secret") ?? "");
+  const expected = Buffer.from(secret);
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
@@ -27,10 +29,13 @@ export async function POST(request: Request) {
     // empty body is fine, defaults below
   }
 
-  const asOf = body.asOf ?? todayIso();
+  const asOf = body.asOf ?? todayIST();
 
   try {
-    const result = await runBilling(asOf, { dryRun: body.dryRun ?? false });
+    const result = await runBilling(asOf, {
+      dryRun: body.dryRun ?? false,
+      triggeredBy: "job",
+    });
     return NextResponse.json({ ...result, preview: result.preview.slice(0, 25) });
   } catch (error) {
     return NextResponse.json(

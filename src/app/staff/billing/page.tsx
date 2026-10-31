@@ -1,16 +1,16 @@
 import { InvoiceStatus } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
-import { todayIso } from "@/core/periods";
 import { prisma } from "@/server/db";
+import { todayIST } from "@/server/billing";
 import { BillingPanel } from "./billing-panel";
 
 export const dynamic = "force-dynamic";
 
 export default async function BillingPage() {
-  const today = todayIso();
+  const today = todayIST();
 
-  const [drafts, confirmed, dueCount, lastRuns] = await Promise.all([
+  const [drafts, confirmed, dueCount, lastRuns, recentRuns] = await Promise.all([
     prisma.invoice.count({ where: { status: InvoiceStatus.draft } }),
     prisma.invoice.count({ where: { status: InvoiceStatus.confirmed } }),
     prisma.subscription.count({
@@ -21,6 +21,10 @@ export default async function BillingPage() {
       orderBy: { createdAt: "desc" },
       take: 5,
       include: { customer: true },
+    }),
+    prisma.billingRun.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 10,
     }),
   ]);
 
@@ -48,6 +52,59 @@ export default async function BillingPage() {
       </div>
 
       <BillingPanel today={today} />
+
+      {recentRuns.length > 0 ? (
+        <Card title="Recent runs" description="Audit log of previous billing runs and previews.">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>As of</th>
+                <th>Mode</th>
+                <th className="num">Considered</th>
+                <th className="num">Created</th>
+                <th className="num">Skipped</th>
+                <th className="num">Errors</th>
+                <th className="num">Value</th>
+                <th className="num">Duration</th>
+                <th>Triggered by</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentRuns.map((run) => (
+                <tr key={run.id}>
+                  <td className="text-xs text-[var(--muted)]">
+                    {run.createdAt.toLocaleTimeString("en-GB", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                      timeZone: "UTC",
+                    })}
+                  </td>
+                  <td>
+                    {run.asOf.toLocaleDateString("en-GB", {
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                      timeZone: "UTC",
+                    })}
+                  </td>
+                  <td>
+                    <Badge>{run.dryRun ? "Preview" : "Run"}</Badge>
+                  </td>
+                  <td className="num">{run.considered}</td>
+                  <td className="num">{run.created}</td>
+                  <td className="num">{run.skipped}</td>
+                  <td className="num">{run.errorCount}</td>
+                  <td className="num">{formatINR(run.totalValue)}</td>
+                  <td className="num">{run.durationMs} ms</td>
+                  <td>{run.triggeredBy ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      ) : null}
 
       {lastRuns.length > 0 ? (
         <Card title="Newest draft invoices" description="Created by the last run.">

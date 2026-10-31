@@ -352,6 +352,23 @@ model Payment {
   @@map("payments")
 }
 
+model BillingRun {
+  id          String   @id @default(uuid()) @db.Uuid
+  asOf        DateTime @map("as_of") @db.Date
+  dryRun      Boolean  @map("dry_run")
+  considered  Int
+  created     Int
+  skipped     Int
+  errorCount  Int      @map("error_count")
+  totalValue  Int      @map("total_value")
+  durationMs  Int      @map("duration_ms")
+  triggeredBy String?  @map("triggered_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("billing_runs")
+}
+
 // Gap-free document numbers: UPDATE ... RETURNING inside the same transaction.
 // A Postgres sequence leaves gaps whenever a transaction rolls back.
 model Counter {
