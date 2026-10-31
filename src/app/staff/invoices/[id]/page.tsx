@@ -1,9 +1,11 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
 import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
-import { invoiceDisplayStatus } from "@/server/invoices";
+import { INVOICE_STATUS_LABEL, invoiceDisplayStatus } from "@/server/invoices";
 import { InvoiceActions } from "./invoice-actions";
 import { PaymentForm } from "./payment-form";
 import { PrintButton } from "./print-button";
@@ -11,6 +13,103 @@ import { PrintButton } from "./print-button";
 export const dynamic = "force-dynamic";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  online: "Online",
+  upi: "UPI",
+  bank: "Bank transfer",
+  cash: "Cash",
+  cheque: "Cheque",
+};
+
+const loadInvoiceDocument = cache(async (invoiceId: string) => {
+  const [invoice, customer, subscription, plan, lines, payments, redemptions, discounts] =
+    await Promise.all([
+      prisma.invoice.findUnique({
+        where: { id: invoiceId },
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          invoiceDate: true,
+          dueDate: true,
+          periodStart: true,
+          periodEnd: true,
+          subtotal: true,
+          discountTotal: true,
+          taxTotal: true,
+          total: true,
+          amountPaid: true,
+          sentAt: true,
+        },
+      }),
+      prisma.customer.findFirst({
+        where: { invoices: { some: { id: invoiceId } } },
+        select: {
+          id: true,
+          code: true,
+          companyName: true,
+          contactName: true,
+          email: true,
+          address: true,
+          paymentTermsDays: true,
+        },
+      }),
+      prisma.subscription.findFirst({
+        where: { invoices: { some: { id: invoiceId } } },
+        select: { id: true, number: true },
+      }),
+      prisma.plan.findFirst({
+        where: { subscriptions: { some: { invoices: { some: { id: invoiceId } } } } },
+        select: { name: true },
+      }),
+      prisma.invoiceLine.findMany({
+        where: { invoiceId },
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          description: true,
+          quantity: true,
+          unitPrice: true,
+          discountAmount: true,
+          taxableAmount: true,
+          taxRateBp: true,
+          lineTotal: true,
+        },
+      }),
+      prisma.payment.findMany({
+        where: { invoiceId },
+        orderBy: { paidAt: "desc" },
+        select: { id: true, method: true, amount: true, paidAt: true, note: true },
+      }),
+      prisma.discountRedemption.findMany({
+        where: { invoiceId },
+        select: { id: true, amount: true, discountId: true },
+      }),
+      prisma.discount.findMany({
+        where: { redemptions: { some: { invoiceId } } },
+        select: { id: true, name: true },
+      }),
+    ]);
+  if (!invoice || !customer) return null;
+  const discountNames = new Map(discounts.map((discount) => [discount.id, discount.name]));
+  const namedRedemptions = redemptions.map((redemption) => ({
+    id: redemption.id,
+    amount: redemption.amount,
+    discountName: discountNames.get(redemption.discountId) ?? "Discount",
+  }));
+  return { invoice, customer, subscription, plan, lines, payments, redemptions: namedRedemptions };
+});
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const document = UUID.test(id) ? await loadInvoiceDocument(id) : null;
+  return { title: `${document?.invoice.number ?? "Draft invoice"} · Brightloop` };
+}
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -43,19 +142,10 @@ export default async function InvoiceDetailPage({
   const { id } = await params;
   if (!UUID.test(id)) notFound();
 
-  const invoice = await prisma.invoice.findUnique({
-    where: { id },
-    include: {
-      customer: true,
-      subscription: { include: { plan: true } },
-      lines: true,
-      payments: { orderBy: { paidAt: "desc" } },
-      redemptions: { include: { discount: true } },
-    },
-  });
-  if (!invoice) notFound();
+  const document = await loadInvoiceDocument(id);
+  if (!document) notFound();
 
-  const { customer, subscription } = invoice;
+  const { invoice, customer, subscription, plan, lines, payments, redemptions } = document;
   const balanceDue = invoiceBalance(invoice.total, invoice.amountPaid);
 
   return (
@@ -112,9 +202,9 @@ export default async function InvoiceDetailPage({
                 "—"
               )}
             </Detail>
-            <Detail label="Plan">{subscription?.plan.name ?? "—"}</Detail>
+            <Detail label="Plan">{plan?.name ?? "—"}</Detail>
             <Detail label="Status">
-              <Badge>{invoiceDisplayStatus(invoice)}</Badge>
+              <Badge>{INVOICE_STATUS_LABEL[invoiceDisplayStatus(invoice)]}</Badge>
             </Detail>
             <Detail label="Sent">
               {invoice.sentAt ? `Sent on ${formatDate(invoice.sentAt)}` : "Not sent yet"}
@@ -138,7 +228,7 @@ export default async function InvoiceDetailPage({
             </tr>
           </thead>
           <tbody>
-            {invoice.lines.map((line) => (
+            {lines.map((line) => (
               <tr key={line.id}>
                 <td>{line.description}</td>
                 <td className="num">{line.quantity}</td>
@@ -186,16 +276,16 @@ export default async function InvoiceDetailPage({
             </tr>
           </thead>
           <tbody>
-            {invoice.payments.length === 0 ? (
+            {payments.length === 0 ? (
               <tr>
                 <td colSpan={4} className="text-[var(--muted)]">
                   No payments recorded.
                 </td>
               </tr>
             ) : (
-              invoice.payments.map((payment) => (
+              payments.map((payment) => (
                 <tr key={payment.id}>
-                  <td>{payment.method}</td>
+                  <td>{PAYMENT_METHOD_LABEL[payment.method] ?? payment.method}</td>
                   <td className="num">{formatINR(payment.amount)}</td>
                   <td>{formatDate(payment.paidAt)}</td>
                   <td>{payment.note ?? "—"}</td>
@@ -217,13 +307,13 @@ export default async function InvoiceDetailPage({
         </div>
       </Card>
 
-      {invoice.redemptions.length > 0 ? (
+      {redemptions.length > 0 ? (
         <Card>
           <SectionTitle>Discounts</SectionTitle>
           <ul className="space-y-1 text-sm">
-            {invoice.redemptions.map((redemption) => (
+            {redemptions.map((redemption) => (
               <li key={redemption.id}>
-                {`${redemption.discount.name} — ${formatINR(redemption.amount)}`}
+                {`${redemption.discountName} — ${formatINR(redemption.amount)}`}
               </li>
             ))}
           </ul>

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cache } from "react";
 import type { Plan, Prisma, SubscriptionLine } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { priceDocument } from "@/core/pricing";
@@ -15,6 +16,15 @@ import type {
 } from "@/contracts";
 
 export const SUBSCRIPTION_EVENTS = Object.keys(SUB_TRANSITIONS) as SubEvent[];
+
+export const SUBSCRIPTION_STATUS_LABEL: Record<SubStatus, string> = {
+  draft: "Draft",
+  quotation: "Quotation",
+  confirmed: "Confirmed",
+  active: "Active",
+  paused: "Paused",
+  closed: "Closed",
+};
 
 const SUBSCRIPTION_COUNTER_KEY = "SUB-2026";
 
@@ -307,30 +317,22 @@ export async function changeSubscriptionStatus(
   return { status: transition.next };
 }
 
-export async function previewNextInvoice(subscription: {
-  customerId: string;
-  nextBillingDate: Date;
-  lines: SubscriptionLine[];
-}): Promise<PricedDoc> {
-  const [taxes, discounts, redemptions, products] = await Promise.all([
-    prisma.tax.findMany(),
+export interface PricingRules {
+  taxRules: TaxRule[];
+  discountRules: DiscountRule[];
+  customerRedemptions: Record<string, number>;
+}
+
+export async function loadPricingRules(subscriptionId: string): Promise<PricingRules> {
+  const [taxes, discounts, redemptions] = await Promise.all([
+    prisma.tax.findMany({ select: { id: true, name: true, rateBp: true } }),
     prisma.discount.findMany({ where: { isActive: true } }),
     prisma.discountRedemption.groupBy({
       by: ["discountId"],
-      where: { customerId: subscription.customerId },
+      where: { invoice: { customer: { subscriptions: { some: { id: subscriptionId } } } } },
       _count: { _all: true },
     }),
-    prisma.product.findMany({
-      where: { id: { in: subscription.lines.map((line) => line.productId) } },
-      select: { id: true, name: true },
-    }),
   ]);
-
-  const taxRules: TaxRule[] = taxes.map((tax) => ({
-    id: tax.id,
-    name: tax.name,
-    rateBp: tax.rateBp,
-  }));
 
   const discountRules: DiscountRule[] = discounts.map((discount) => ({
     id: discount.id,
@@ -353,11 +355,19 @@ export async function previewNextInvoice(subscription: {
   for (const rule of discountRules) customerRedemptions[rule.id] = 0;
   for (const row of redemptions) customerRedemptions[row.discountId] = row._count._all;
 
-  const productNames = new Map(products.map((product) => [product.id, product.name]));
-  const lines: PriceLineInput[] = subscription.lines.map((line) => ({
+  return { taxRules: taxes, discountRules, customerRedemptions };
+}
+
+export function priceSubscriptionLines(args: {
+  lines: Pick<SubscriptionLine, "productId" | "unitPrice" | "taxId" | "quantity">[];
+  productNames: Map<string, string>;
+  nextBillingDate: Date;
+  rules: PricingRules;
+}): PricedDoc {
+  const lines: PriceLineInput[] = args.lines.map((line) => ({
     product: {
       id: line.productId,
-      name: productNames.get(line.productId) ?? "Subscription charge",
+      name: args.productNames.get(line.productId) ?? "Subscription charge",
       salesPrice: line.unitPrice,
       taxId: line.taxId,
     },
@@ -366,10 +376,10 @@ export async function previewNextInvoice(subscription: {
 
   return priceDocument({
     lines,
-    taxes: taxRules,
-    discounts: discountRules,
-    customerRedemptions,
-    asOf: isoDate(subscription.nextBillingDate),
+    taxes: args.rules.taxRules,
+    discounts: args.rules.discountRules,
+    customerRedemptions: args.rules.customerRedemptions,
+    asOf: isoDate(args.nextBillingDate),
   });
 }
 
@@ -528,3 +538,86 @@ export async function startSubscriptionFromTemplate(details: {
     return subscription;
   });
 }
+
+export const loadSubscriptionDocument = cache(async (subscriptionId: string) => {
+  const [subscription, customer, plan, lines, templates, products, variants, rules] =
+    await Promise.all([
+      prisma.subscription.findUnique({
+        where: { id: subscriptionId },
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          templateId: true,
+          createdAt: true,
+          startDate: true,
+          expiryDate: true,
+          nextBillingDate: true,
+          periodStart: true,
+          periodEnd: true,
+          paymentTermsDays: true,
+          pausedAt: true,
+          closedReason: true,
+        },
+      }),
+      prisma.customer.findFirst({
+        where: { subscriptions: { some: { id: subscriptionId } } },
+        select: { id: true, companyName: true, contactName: true, email: true, address: true },
+      }),
+      prisma.plan.findFirst({ where: { subscriptions: { some: { id: subscriptionId } } } }),
+      prisma.subscriptionLine.findMany({
+        where: { subscriptionId },
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          productId: true,
+          variantId: true,
+          quantity: true,
+          unitPrice: true,
+          taxId: true,
+        },
+      }),
+      prisma.quotationTemplate.findMany({ select: { id: true, validityDays: true } }),
+      prisma.product.findMany({
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, isActive: true },
+      }),
+      prisma.productVariant.findMany({
+        where: { isActive: true },
+        orderBy: [{ attribute: "asc" }, { value: "asc" }],
+        select: { id: true, productId: true, attribute: true, value: true },
+      }),
+      loadPricingRules(subscriptionId),
+    ]);
+  if (!subscription || !customer || !plan) return null;
+
+  const productNames = new Map(products.map((product) => [product.id, product.name]));
+  const template = templates.find((candidate) => candidate.id === subscription.templateId) ?? null;
+  const validUntil = template
+    ? quotationValidUntil(subscription.createdAt, template.validityDays)
+    : null;
+  const nextInvoice = priceSubscriptionLines({
+    lines,
+    productNames,
+    nextBillingDate: subscription.nextBillingDate,
+    rules,
+  });
+
+  return {
+    subscription,
+    customer,
+    plan,
+    lines,
+    validUntil,
+    nextInvoice,
+    productNames,
+    activeProducts: products
+      .filter((product) => product.isActive)
+      .map((product) => ({ id: product.id, name: product.name })),
+    variants: variants.map((variant) => ({
+      id: variant.id,
+      productId: variant.productId,
+      label: `${variant.attribute}: ${variant.value}`,
+    })),
+  };
+});

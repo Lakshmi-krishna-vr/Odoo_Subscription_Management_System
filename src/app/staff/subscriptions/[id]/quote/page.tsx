@@ -1,9 +1,9 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { SubStatus } from "@prisma/client";
 import { Card, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
-import { prisma } from "@/server/db";
-import { previewNextInvoice, quotationValidUntil } from "@/server/subscriptions";
+import { loadSubscriptionDocument } from "@/server/subscriptions";
 import { PrintButton } from "@/app/staff/invoices/[id]/print-button";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +18,17 @@ const PERIOD_LABEL: Record<string, string> = {
   month: "Monthly",
   year: "Yearly",
 };
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const document = UUID.test(id) ? await loadSubscriptionDocument(id) : null;
+  const title = document ? `Quotation ${document.subscription.number}` : "Quotation";
+  return { title: `${title} · Brightloop` };
+}
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -46,23 +57,12 @@ export default async function QuotationPage({
   const { id } = await params;
   if (!UUID.test(id)) notFound();
 
-  const subscription = await prisma.subscription.findUnique({
-    where: { id },
-    include: { customer: true, plan: true, lines: { orderBy: { id: "asc" } } },
-  });
-  if (!subscription || !QUOTABLE_STATUSES.includes(subscription.status)) notFound();
+  const document = await loadSubscriptionDocument(id);
+  if (!document || !QUOTABLE_STATUSES.includes(document.subscription.status)) notFound();
 
-  const { customer, plan } = subscription;
-  const [quotedPrices, template] = await Promise.all([
-    previewNextInvoice(subscription),
-    subscription.templateId
-      ? prisma.quotationTemplate.findUnique({ where: { id: subscription.templateId } })
-      : null,
-  ]);
-  const validUntil = template
-    ? formatDate(
-        new Date(`${quotationValidUntil(subscription.createdAt, template.validityDays)}T00:00:00Z`),
-      )
+  const { subscription, customer, plan, nextInvoice: quotedPrices } = document;
+  const validUntil = document.validUntil
+    ? formatDate(new Date(`${document.validUntil}T00:00:00Z`))
     : "—";
   const billingPeriod = `${PERIOD_LABEL[plan.billingPeriod] ?? plan.billingPeriod}${
     plan.intervalCount > 1 ? ` × ${plan.intervalCount}` : ""

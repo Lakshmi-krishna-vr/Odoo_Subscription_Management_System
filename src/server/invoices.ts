@@ -4,6 +4,15 @@ import { todayIso } from "@/core/periods";
 import { deriveInvoiceStatus } from "@/core/state";
 
 const COUNTER_KEY = "INV-2026";
+
+export const INVOICE_STATUS_LABEL: Record<InvoiceStatus, string> = {
+  draft: "Draft",
+  confirmed: "Confirmed",
+  partially_paid: "Partially paid",
+  paid: "Paid",
+  overdue: "Overdue",
+  cancelled: "Cancelled",
+};
 const SENDABLE_STATUSES: InvoiceStatus[] = ["confirmed", "partially_paid", "paid", "overdue"];
 
 export function invoiceDisplayStatus(

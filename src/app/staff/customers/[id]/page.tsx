@@ -1,16 +1,47 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import { Badge, Card, PageHeader, Shell, Stat } from "@/components/ui";
 import { formatINR } from "@/core/money";
 import { todayIso } from "@/core/periods";
 import { invoiceBalance } from "@/core/state";
 import { customerStandings } from "@/server/customers";
 import { prisma } from "@/server/db";
-import { displayStatusWhere, invoiceDisplayStatus } from "@/server/invoices";
+import { INVOICE_STATUS_LABEL, displayStatusWhere, invoiceDisplayStatus } from "@/server/invoices";
+import { SUBSCRIPTION_STATUS_LABEL } from "@/server/subscriptions";
 import { CustomerForm } from "./customer-form";
 
 export const dynamic = "force-dynamic";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const loadCustomer = cache((customerId: string) =>
+  prisma.customer.findUnique({
+    where: { id: customerId },
+    select: {
+      id: true,
+      code: true,
+      companyName: true,
+      contactName: true,
+      email: true,
+      phone: true,
+      address: true,
+      paymentTermsDays: true,
+      isActive: true,
+      createdAt: true,
+    },
+  }),
+);
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const customer = UUID.test(id) ? await loadCustomer(id) : null;
+  return { title: `${customer?.companyName ?? "Customer"} · Brightloop` };
+}
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -39,43 +70,42 @@ export default async function CustomerDetailPage({
   const { id } = await params;
   if (!UUID.test(id)) notFound();
 
-  const customer = await prisma.customer.findUnique({ where: { id } });
-  if (!customer) notFound();
-
   const today = todayIso();
-  const [standings, overdueCount, paidSum, subscriptions, invoices] = await Promise.all([
-    customerStandings([customer.id]),
-    prisma.invoice.count({
-      where: { AND: [{ customerId: customer.id }, displayStatusWhere("overdue", today)] },
-    }),
-    prisma.payment.aggregate({ where: { customerId: customer.id }, _sum: { amount: true } }),
-    prisma.subscription.findMany({
-      where: { customerId: customer.id },
-      orderBy: { nextBillingDate: "asc" },
-      select: {
-        id: true,
-        number: true,
-        status: true,
-        nextBillingDate: true,
-        plan: { select: { name: true } },
-      },
-    }),
-    prisma.invoice.findMany({
-      where: { customerId: customer.id },
-      orderBy: { invoiceDate: "desc" },
-      take: 20,
-      select: {
-        id: true,
-        number: true,
-        status: true,
-        invoiceDate: true,
-        dueDate: true,
-        total: true,
-        amountPaid: true,
-      },
-    }),
-  ]);
+  const [customer, standings, overdueCount, paidSum, subscriptions, plans, invoices] =
+    await Promise.all([
+      loadCustomer(id),
+      customerStandings([id]),
+      prisma.invoice.count({
+        where: { AND: [{ customerId: id }, displayStatusWhere("overdue", today)] },
+      }),
+      prisma.payment.aggregate({ where: { customerId: id }, _sum: { amount: true } }),
+      prisma.subscription.findMany({
+        where: { customerId: id },
+        orderBy: { nextBillingDate: "asc" },
+        select: { id: true, number: true, status: true, nextBillingDate: true, planId: true },
+      }),
+      prisma.plan.findMany({
+        where: { subscriptions: { some: { customerId: id } } },
+        select: { id: true, name: true },
+      }),
+      prisma.invoice.findMany({
+        where: { customerId: id },
+        orderBy: { invoiceDate: "desc" },
+        take: 20,
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          invoiceDate: true,
+          dueDate: true,
+          total: true,
+          amountPaid: true,
+        },
+      }),
+    ]);
+  if (!customer) notFound();
   const standing = standings.get(customer.id);
+  const planNames = new Map(plans.map((plan) => [plan.id, plan.name]));
 
   return (
     <Shell role="staff">
@@ -124,7 +154,7 @@ export default async function CustomerDetailPage({
             {subscriptions.length === 0 ? (
               <tr>
                 <td colSpan={4} className="text-[var(--muted)]">
-                  No subscriptions yet.
+                  This customer has no subscriptions yet.
                 </td>
               </tr>
             ) : (
@@ -138,9 +168,9 @@ export default async function CustomerDetailPage({
                       {subscription.number}
                     </a>
                   </td>
-                  <td>{subscription.plan.name}</td>
+                  <td>{planNames.get(subscription.planId) ?? "—"}</td>
                   <td>
-                    <Badge>{subscription.status}</Badge>
+                    <Badge>{SUBSCRIPTION_STATUS_LABEL[subscription.status]}</Badge>
                   </td>
                   <td>{formatDate(subscription.nextBillingDate)}</td>
                 </tr>
@@ -166,7 +196,7 @@ export default async function CustomerDetailPage({
             {invoices.length === 0 ? (
               <tr>
                 <td colSpan={6} className="text-[var(--muted)]">
-                  No invoices yet.
+                  This customer has no invoices yet.
                 </td>
               </tr>
             ) : (
@@ -183,7 +213,7 @@ export default async function CustomerDetailPage({
                   <td>{formatDate(invoice.invoiceDate)}</td>
                   <td>{formatDate(invoice.dueDate)}</td>
                   <td>
-                    <Badge>{invoiceDisplayStatus(invoice, today)}</Badge>
+                    <Badge>{INVOICE_STATUS_LABEL[invoiceDisplayStatus(invoice, today)]}</Badge>
                   </td>
                   <td className="num">{formatINR(invoice.total)}</td>
                   <td className="num font-medium">

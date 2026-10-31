@@ -1,11 +1,16 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { SubStatus } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
 import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
-import { invoiceDisplayStatus } from "@/server/invoices";
-import { allowedEvents, previewNextInvoice, quotationValidUntil } from "@/server/subscriptions";
+import { INVOICE_STATUS_LABEL, invoiceDisplayStatus } from "@/server/invoices";
+import {
+  SUBSCRIPTION_STATUS_LABEL,
+  allowedEvents,
+  loadSubscriptionDocument,
+} from "@/server/subscriptions";
 import { LinesEditor } from "./lines-editor";
 import { SubscriptionActions } from "./subscription-actions";
 
@@ -29,6 +34,16 @@ const PERIOD_LABEL: Record<string, string> = {
   month: "Monthly",
   year: "Yearly",
 };
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const document = UUID.test(id) ? await loadSubscriptionDocument(id) : null;
+  return { title: `${document?.subscription.number ?? "Subscription"} · Brightloop` };
+}
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -90,47 +105,31 @@ export default async function SubscriptionDetailPage({
   const { id } = await params;
   if (!UUID.test(id)) notFound();
 
-  const subscription = await prisma.subscription.findUnique({
-    where: { id },
-    include: {
-      customer: true,
-      plan: true,
-      lines: { orderBy: { id: "asc" } },
-      invoices: { orderBy: { invoiceDate: "desc" } },
-    },
-  });
-  if (!subscription) notFound();
-
-  const { customer, plan } = subscription;
-  const canEditLines = EDITABLE_STATUSES.includes(subscription.status);
-  const [nextInvoice, template, products, variants] = await Promise.all([
-    previewNextInvoice(subscription),
-    subscription.templateId
-      ? prisma.quotationTemplate.findUnique({ where: { id: subscription.templateId } })
-      : null,
-    canEditLines
-      ? prisma.product.findMany({
-          where: { isActive: true },
-          orderBy: { name: "asc" },
-          select: { id: true, name: true },
-        })
-      : [],
-    canEditLines
-      ? prisma.productVariant.findMany({
-          where: { isActive: true },
-          orderBy: [{ attribute: "asc" }, { value: "asc" }],
-          select: { id: true, productId: true, attribute: true, value: true },
-        })
-      : [],
+  const [document, invoices] = await Promise.all([
+    loadSubscriptionDocument(id),
+    prisma.invoice.findMany({
+      where: { subscriptionId: id },
+      orderBy: { invoiceDate: "desc" },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        periodStart: true,
+        periodEnd: true,
+        invoiceDate: true,
+        dueDate: true,
+        total: true,
+        amountPaid: true,
+      },
+    }),
   ]);
-  const productNames = new Map(products.map((product) => [product.id, product.name]));
-  const variantLabels = new Map(
-    variants.map((variant) => [variant.id, `${variant.attribute}: ${variant.value}`]),
-  );
-  const validUntil =
-    subscription.status === "quotation" && template
-      ? quotationValidUntil(subscription.createdAt, template.validityDays)
-      : null;
+  if (!document) notFound();
+
+  const { subscription, customer, plan, lines, nextInvoice, productNames, activeProducts, variants } =
+    document;
+  const canEditLines = EDITABLE_STATUSES.includes(subscription.status);
+  const variantLabels = new Map(variants.map((variant) => [variant.id, variant.label]));
+  const validUntil = subscription.status === "quotation" ? document.validUntil : null;
   const policies = [
     plan.autoClose ? "auto-close" : null,
     plan.closable ? "can close early" : null,
@@ -145,7 +144,7 @@ export default async function SubscriptionDetailPage({
         subtitle={customer.companyName}
         right={
           <div className="flex items-start gap-2">
-            <Badge>{subscription.status}</Badge>
+            <Badge>{SUBSCRIPTION_STATUS_LABEL[subscription.status]}</Badge>
             {canEditLines ? (
               <a
                 href={`/staff/subscriptions/${subscription.id}/quote`}
@@ -234,18 +233,14 @@ export default async function SubscriptionDetailPage({
         <Card title="Edit lines" description="Lines can be changed until the subscription is confirmed.">
           <LinesEditor
             subscriptionId={subscription.id}
-            lines={subscription.lines.map((line) => ({
+            lines={lines.map((line) => ({
               id: line.id,
               productName: productNames.get(line.productId) ?? "Product no longer active",
               variantLabel: line.variantId ? (variantLabels.get(line.variantId) ?? null) : null,
               quantity: line.quantity,
             }))}
-            products={products}
-            variants={variants.map((variant) => ({
-              id: variant.id,
-              productId: variant.productId,
-              label: `${variant.attribute}: ${variant.value}`,
-            }))}
+            products={activeProducts}
+            variants={variants}
           />
         </Card>
       ) : null}
@@ -318,14 +313,14 @@ export default async function SubscriptionDetailPage({
             </tr>
           </thead>
           <tbody>
-            {subscription.invoices.length === 0 ? (
+            {invoices.length === 0 ? (
               <tr>
                 <td colSpan={6} className="text-[var(--muted)]">
-                  No invoices yet.
+                  No invoices for this subscription yet.
                 </td>
               </tr>
             ) : (
-              subscription.invoices.map((invoice) => (
+              invoices.map((invoice) => (
                 <tr key={invoice.id}>
                   <td>
                     <a
@@ -340,7 +335,7 @@ export default async function SubscriptionDetailPage({
                   </td>
                   <td>{formatDate(invoice.invoiceDate)}</td>
                   <td>
-                    <Badge>{invoiceDisplayStatus(invoice)}</Badge>
+                    <Badge>{INVOICE_STATUS_LABEL[invoiceDisplayStatus(invoice)]}</Badge>
                   </td>
                   <td className="num">{formatINR(invoice.total)}</td>
                   <td className="num font-medium">
