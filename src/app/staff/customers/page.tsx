@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import type { Prisma } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
@@ -5,6 +6,8 @@ import { customerStandings } from "@/server/customers";
 import { prisma } from "@/server/db";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Customers · Brightloop" };
 
 const PAGE_SIZE = 25;
 

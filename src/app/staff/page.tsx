@@ -1,4 +1,7 @@
+import type { Metadata } from "next";
 import { Badge, PageHeader, Shell } from "@/components/ui";
+
+export const metadata: Metadata = { title: "Staff · Brightloop" };
 
 export default function StaffPage() {
   return (

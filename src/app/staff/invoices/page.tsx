@@ -1,13 +1,16 @@
+import type { Metadata } from "next";
 import { InvoiceStatus, Prisma } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { formatINR } from "@/core/money";
 import { todayIso } from "@/core/periods";
 import { invoiceBalance } from "@/core/state";
 import { prisma } from "@/server/db";
-import { displayStatusWhere, invoiceDisplayStatus } from "@/server/invoices";
+import { INVOICE_STATUS_LABEL, displayStatusWhere, invoiceDisplayStatus } from "@/server/invoices";
 
 // Read-only page: the build must never hit the database.
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Invoices · Brightloop" };
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -169,7 +172,7 @@ export default async function StaffInvoicesPage({
           <option value="">All statuses</option>
           {INVOICE_STATUSES.map((status) => (
             <option key={status} value={status}>
-              {status}
+              {INVOICE_STATUS_LABEL[status as InvoiceStatus]}
             </option>
           ))}
         </select>
@@ -230,7 +233,7 @@ export default async function StaffInvoicesPage({
                     <td>{formatDate(invoice.dueDate)}</td>
                     <td>
                       <span className="flex flex-wrap gap-1">
-                        <Badge>{invoiceDisplayStatus(invoice, today)}</Badge>
+                        <Badge>{INVOICE_STATUS_LABEL[invoiceDisplayStatus(invoice, today)]}</Badge>
                         {invoice.sentAt ? <Badge>Sent</Badge> : null}
                       </span>
                     </td>

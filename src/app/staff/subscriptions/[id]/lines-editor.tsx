@@ -44,6 +44,8 @@ export function LinesEditor({
     {},
   );
   const [productId, setProductId] = useState(products[0]?.id ?? "");
+  const [pendingForm, setPendingForm] = useState<string | null>(null);
+  const isPending = (formKey: string) => changing && pendingForm === formKey;
   const productVariants = variants.filter((variant) => variant.productId === productId);
   const canRemove = lines.length > 1;
 
@@ -64,7 +66,11 @@ export function LinesEditor({
               <td>{line.productName}</td>
               <td>{line.variantLabel ?? "—"}</td>
               <td className="num">
-                <form action={changeRun} className="flex items-center justify-end gap-2">
+                <form
+                  action={changeRun}
+                  onSubmit={() => setPendingForm(`quantity-${line.id}`)}
+                  className="flex items-center justify-end gap-2"
+                >
                   <input type="hidden" name="subscriptionId" value={subscriptionId} />
                   <input type="hidden" name="lineId" value={line.id} />
                   <input type="hidden" name="change" value="quantity" />
@@ -79,17 +85,17 @@ export function LinesEditor({
                     className={`${INPUT} w-20 text-right`}
                   />
                   <button type="submit" className={SECONDARY} disabled={changing}>
-                    Save
+                    {isPending(`quantity-${line.id}`) ? "Saving…" : "Save"}
                   </button>
                 </form>
               </td>
               <td className="num">
-                <form action={changeRun}>
+                <form action={changeRun} onSubmit={() => setPendingForm(`remove-${line.id}`)}>
                   <input type="hidden" name="subscriptionId" value={subscriptionId} />
                   <input type="hidden" name="lineId" value={line.id} />
                   <input type="hidden" name="change" value="remove" />
                   <button type="submit" className={SECONDARY} disabled={changing || !canRemove}>
-                    Remove
+                    {isPending(`remove-${line.id}`) ? "Removing…" : "Remove"}
                   </button>
                 </form>
               </td>
@@ -98,7 +104,11 @@ export function LinesEditor({
         </tbody>
       </table>
 
-      <form action={changeRun} className="flex flex-wrap items-center gap-2">
+      <form
+        action={changeRun}
+        onSubmit={() => setPendingForm("add")}
+        className="flex flex-wrap items-center gap-2"
+      >
         <input type="hidden" name="subscriptionId" value={subscriptionId} />
         <input type="hidden" name="change" value="add" />
         <select
@@ -134,7 +144,7 @@ export function LinesEditor({
           className={`${INPUT} w-20 text-right`}
         />
         <button type="submit" className={PRIMARY} disabled={changing || products.length === 0}>
-          {changing ? "Saving…" : "Add line"}
+          {isPending("add") ? "Adding…" : "Add line"}
         </button>
       </form>
 

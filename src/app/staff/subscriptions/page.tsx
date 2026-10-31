@@ -1,9 +1,13 @@
+import type { Metadata } from "next";
 import { Prisma, SubStatus } from "@prisma/client";
 import { Badge, Card, PageHeader, Shell } from "@/components/ui";
 import { prisma } from "@/server/db";
+import { SUBSCRIPTION_STATUS_LABEL } from "@/server/subscriptions";
 
 // Read-only page: the build must never hit the database.
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Subscriptions · Brightloop" };
 
 function formatDate(value: Date | null): string {
   if (!value) return "—";
@@ -140,7 +144,7 @@ export default async function StaffSubscriptionsPage({
           <option value="">All statuses</option>
           {SUBSCRIPTION_STATUSES.map((status) => (
             <option key={status} value={status}>
-              {status}
+              {SUBSCRIPTION_STATUS_LABEL[status as SubStatus]}
             </option>
           ))}
         </select>
@@ -194,7 +198,7 @@ export default async function StaffSubscriptionsPage({
                   <td>{subscription.customer.companyName}</td>
                   <td>{subscription.plan.name}</td>
                   <td>
-                    <Badge>{subscription.status}</Badge>
+                    <Badge>{SUBSCRIPTION_STATUS_LABEL[subscription.status]}</Badge>
                   </td>
                   <td>{formatDate(subscription.startDate)}</td>
                   <td>{formatDate(subscription.expiryDate)}</td>

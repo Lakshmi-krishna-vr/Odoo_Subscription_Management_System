@@ -21,6 +21,16 @@ const EVENT_LABEL: Record<SubEvent, string> = {
   close: "Close",
 };
 
+const PENDING_LABEL: Record<SubEvent, string> = {
+  send_quote: "Sending…",
+  confirm: "Confirming…",
+  activate: "Activating…",
+  pause: "Pausing…",
+  resume: "Resuming…",
+  renew: "Renewing…",
+  close: "Closing…",
+};
+
 const PRIMARY_EVENTS: SubEvent[] = ["send_quote", "confirm", "activate", "resume"];
 
 function Result({ state }: { state: SubscriptionActionState }) {
@@ -48,6 +58,7 @@ export function SubscriptionActions({
     {},
   );
   const [isClosing, setIsClosing] = useState(false);
+  const [pendingEvent, setPendingEvent] = useState<SubEvent | null>(null);
 
   const buttonEvents = allowedEvents.filter((event) => event !== "close");
   const canClose = allowedEvents.includes("close");
@@ -56,7 +67,7 @@ export function SubscriptionActions({
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         {buttonEvents.map((event) => (
-          <form key={event} action={changeRun}>
+          <form key={event} action={changeRun} onSubmit={() => setPendingEvent(event)}>
             <input type="hidden" name="subscriptionId" value={subscriptionId} />
             <input type="hidden" name="event" value={event} />
             <button
@@ -64,7 +75,7 @@ export function SubscriptionActions({
               className={PRIMARY_EVENTS.includes(event) ? PRIMARY : SECONDARY}
               disabled={changing}
             >
-              {EVENT_LABEL[event]}
+              {changing && pendingEvent === event ? PENDING_LABEL[event] : EVENT_LABEL[event]}
             </button>
           </form>
         ))}
