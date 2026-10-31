@@ -8,7 +8,6 @@ import { prisma } from "@/server/db";
 import {
   authenticate,
   createSession,
-  destroySession,
   homeFor,
   passwordProblem,
 } from "@/server/auth";
@@ -138,9 +137,4 @@ export async function resetAction(_prev: AuthState, formData: FormData): Promise
   ]);
 
   redirect("/login?reset=1");
-}
-
-export async function logoutAction(): Promise<void> {
-  await destroySession();
-  redirect("/login");
 }

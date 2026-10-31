@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { logoutAction } from "@/app/actions";
 
 export function PageHeader({
   title,
@@ -87,12 +88,20 @@ export function Shell({
             <span className="text-sm font-semibold tracking-tight">Brightloop</span>
             <Badge>{role}</Badge>
           </div>
-          <nav className="flex gap-4 text-sm text-[var(--muted)]">
+          <nav className="flex items-center gap-4 text-sm text-[var(--muted)]">
             {links.map((link) => (
               <a key={link.href} href={link.href} className="hover:text-[var(--foreground)]">
                 {link.label}
               </a>
             ))}
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="rounded-md border border-[var(--border)] px-2.5 py-1 text-xs hover:text-[var(--foreground)]"
+              >
+                Sign out
+              </button>
+            </form>
           </nav>
         </div>
       </header>
