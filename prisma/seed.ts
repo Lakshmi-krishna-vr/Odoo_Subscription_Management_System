@@ -57,7 +57,7 @@ const LAST = ["Nair", "Menon", "Pillai", "Sharma", "Iyer", "George", "Reddy", "K
 async function main() {
   console.log("clearing existing data…");
   await prisma.$executeRawUnsafe(
-    `TRUNCATE TABLE payments, discount_redemptions, invoice_lines, invoices,
+    `TRUNCATE TABLE billing_runs, payments, discount_redemptions, invoice_lines, invoices,
        subscription_lines, subscriptions, quotation_template_lines,
        quotation_templates, discounts, plans, product_variants, products,
        taxes, password_resets, users, customers, counters

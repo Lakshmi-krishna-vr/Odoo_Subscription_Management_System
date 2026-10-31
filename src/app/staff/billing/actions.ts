@@ -1,8 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { confirmDraftInvoices, runBilling } from "@/server/billing";
-import { todayIso } from "@/core/periods";
+import { confirmDraftInvoices, runBilling, todayIST, type BillingPreviewRow } from "@/server/billing";
 
 export interface BillingActionState {
   error?: string;
@@ -11,13 +10,13 @@ export interface BillingActionState {
   created?: number;
   skipped?: number;
   totalValue?: number;
-  preview?: { subscriptionNumber: string; customer: string; total: number }[];
+  preview?: BillingPreviewRow[];
 }
 
 function readAsOf(formData: FormData): string {
   const value = String(formData.get("asOf") ?? "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  return todayIso();
+  return todayIST();
 }
 
 export async function previewAction(
@@ -25,7 +24,8 @@ export async function previewAction(
   formData: FormData,
 ): Promise<BillingActionState> {
   try {
-    const result = await runBilling(readAsOf(formData), { dryRun: true });
+    const result = await runBilling(readAsOf(formData), { dryRun: true, triggeredBy: "ui" });
+    revalidatePath("/staff/billing");
     return {
       message: `${result.considered} subscriptions are due. Nothing has been written yet.`,
       considered: result.considered,
@@ -44,7 +44,7 @@ export async function commitAction(
   formData: FormData,
 ): Promise<BillingActionState> {
   try {
-    const result = await runBilling(readAsOf(formData), { dryRun: false });
+    const result = await runBilling(readAsOf(formData), { dryRun: false, triggeredBy: "ui" });
     revalidatePath("/staff/billing");
     revalidatePath("/staff/invoices");
     return {
